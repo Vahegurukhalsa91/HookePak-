@@ -1,0 +1,2830 @@
+﻿<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>HookePak</title><script src="https://unpkg.com/react@18/umd/react.production.min.js"></script><script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script><script src="https://unpkg.com/three@0.159.0/build/three.min.js"></script><script src="https://unpkg.com/@babel/standalone/babel.min.js"></script></head><body style="margin:0"><div id="root"></div><script type="text/babel">const { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } = React; const THREE = window.THREE;
+
+
+// ─── Theme ────────────────────────────────────────────────────────────────────
+const T = {
+  bg:"#F9F8F6", surface:"#FFFFFF", border:"#E5E3DD",
+  purple:"#7C3AED", purpleLight:"#EDE9FE", purpleMid:"#C4B5FD",
+  text:"#1A1917", textMid:"#6B6560", textLight:"#A8A29E",
+  green:"#059669", blue:"#2563EB", amber:"#B45309",
+};
+const AC = { CUT:"#FF0000", CREASE:"#0000FF" };
+
+// ─── FEFCO Registry ───────────────────────────────────────────────────────────
+const FEFCO = {
+  "0201":{name:"Regular Slotted Container",abbr:"RSC",group:"02xx - Slotted",
+    desc:"All flaps W/2. Most common shipping box worldwide.",
+    r:"slotted",flaps:W=>{const f=Math.round(W/2);return{tMj:f,tMn:f,bMj:f,bMn:f};}},
+  "0202":{name:"Overlap Slotted Container",abbr:"OSC",group:"02xx - Slotted",
+    desc:"Major flaps overlap past centre. Extra strength for heavy goods.",
+    r:"slotted",flaps:W=>{const ov=Math.max(10,Math.round(W*.08));
+      return{tMj:Math.round(W/2)+ov,tMn:Math.round(W/4),bMj:Math.round(W/2)+ov,bMn:Math.round(W/4)};}},
+  "0203":{name:"Centre Special Slotted",abbr:"CSSC",group:"02xx - Slotted",
+    desc:"Minor flaps shorter. Common for retail display packs.",
+    r:"slotted",flaps:W=>({tMj:Math.round(W/2),tMn:Math.round(W/3),bMj:Math.round(W/2),bMn:Math.round(W/3)})},
+  "0204":{name:"Half Slotted Container",abbr:"HSC",group:"02xx - Slotted",
+    desc:"Open top, base flaps only.",
+    r:"slotted",flaps:W=>({tMj:0,tMn:0,bMj:Math.round(W/2),bMn:Math.round(W/2)})},
+  "0206":{name:"Wrap-Around Blank",abbr:"WAB",group:"02xx - Slotted",
+    desc:"Short dust flaps. Wraps around product on packing line.",
+    r:"slotted",flaps:W=>({tMj:Math.round(W/4),tMn:Math.round(W/4),bMj:Math.round(W/4),bMn:Math.round(W/4)})},
+  "0207":{name:"Half Slotted + Cover",abbr:"HSC+",group:"02xx - Slotted",desc:"HSC with telescope cover lid.",r:"soon"},
+  "0209":{name:"Full Telescope Slotted",abbr:"FTS",group:"02xx - Slotted",desc:"Top and base telescope.",r:"soon"},
+  "0215":{name:"Full Overlap Slotted",abbr:"FOL",group:"02xx - Slotted",
+    desc:"Major flaps = full W. Heavy goods - tiles, flooring.",
+    r:"slotted",flaps:W=>({tMj:W,tMn:Math.round(W/2),bMj:W,bMn:Math.round(W/2)})},
+  "0300":{name:"Simple Die-Cut Tray",abbr:"Tray",group:"03xx - Trays",
+    desc:"Cross-shaped blank, corner notches fold up.",r:"tray"},
+  "0301":{name:"Regular Slotted Tray",abbr:"RST",group:"03xx - Trays",
+    desc:"Shallow slotted tray. Produce, bakery, shelf-ready.",
+    r:"slotted",flaps:W=>({tMj:0,tMn:0,bMj:Math.round(W/2),bMn:Math.round(W/2)})},
+  "0310":{name:"Five Panel Folder Tray",abbr:"FPF",group:"03xx - Trays",desc:"Pizza box style.",r:"soon"},
+  "0311":{name:"Beers Tray",abbr:"Beer",group:"03xx - Trays",desc:"Tray with divider. Multipacks.",r:"soon"},
+  "0401":{name:"One-Piece Folder",abbr:"OPF",group:"04xx - Folders",desc:"Flat-fold for books/media.",r:"soon"},
+  "0420":{name:"Crash-Lock Box",abbr:"CLB",group:"04xx - Folders",desc:"Auto-lock base. Retail POS.",r:"soon"},
+  "0427":{name:"Auto-Bottom Box",abbr:"ABB",group:"04xx - Folders",desc:"Pre-glued auto-forming base.",r:"soon"},
+  "0501":{name:"Slide Box",abbr:"Slide",group:"05xx - Slide",desc:"Inner tray slides into sleeve.",r:"soon"},
+  "0601":{name:"Rigid Box",abbr:"Rigid",group:"06xx - Rigid",desc:"Set-up box, separate lid. Luxury.",r:"soon"},
+  "0713":{name:"Telescope Box",abbr:"Tele",group:"07xx - Special",
+    desc:"Separate lid and base. Electronics, gifting.",r:"telescope"},
+};
+
+const BOARDS = ["E-flute","B-flute","C-flute","BC double","Solid board"];
+const PALLETS = {
+  "EU 1200x800":  {L:1200,W:800, maxH:1600},
+  "UK 1200x1000": {L:1200,W:1000,maxH:1600},
+  "US 1219x1016": {L:1219,W:1016,maxH:1600},
+};
+
+// ─── Geometry helpers ─────────────────────────────────────────────────────────
+const glueTW  = W => Math.max(28, Math.round(W * 0.12));
+const clamp   = (v,a,b) => Math.max(a, Math.min(b, v));
+const round1  = v => Math.round(v * 10) / 10;
+const uniqKey = v => JSON.stringify(v);
+
+function calcSlotted(L,W,H,flaps){
+  const{tMj=0,tMn=0,bMj=0,bMn=0}=flaps;
+  const g=glueTW(W);
+  const topH=tMj>0?Math.max(tMj,tMn):0;
+  const btmH=bMj>0?Math.max(bMj,bMn):0;
+  return{g,topH,btmH,blankW:g+2*W+2*L,blankH:H+topH+btmH,tMj,tMn,bMj,bMn,
+    xs:[0,g,g+W,g+W+L,g+W+L+W,g+2*W+2*L]};
+}
+function calcTray(L,W,H){return{blankW:L+2*H,blankH:W+2*H};}
+
+// ─── DXF ─────────────────────────────────────────────────────────────────────
+let _eid=0;
+const eid=()=>(++_eid).toString(16).toUpperCase().padStart(4,"0");
+const mkLine=(ly,x1,y1,x2,y2)=>
+  `  0\nLINE\n  5\n${eid()}\n100\nAcDbEntity\n  8\n${ly}\n100\nAcDbLine\n 10\n${x1.toFixed(3)}\n 20\n${y1.toFixed(3)}\n 30\n0.000\n 11\n${x2.toFixed(3)}\n 21\n${y2.toFixed(3)}\n 31\n0.000`;
+
+function assembleDXF(cuts,creases){
+  _eid=0;
+  const hdr=`  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1015\n  9\n$INSUNITS\n 70\n4\n  0\nENDSEC`;
+  const tbl=`  0\nSECTION\n  2\nTABLES\n  0\nTABLE\n  2\nLAYER\n 70\n2\n  0\nLAYER\n  2\nCUT\n 70\n0\n 62\n1\n  6\nCONTINUOUS\n  0\nLAYER\n  2\nCREASE\n 70\n0\n 62\n5\n  6\nDASHED\n  0\nENDTAB\n  0\nENDSEC`;
+  const ents=[...cuts.map(([a,b,c,d])=>mkLine("CUT",a,b,c,d)),...creases.map(([a,b,c,d])=>mkLine("CREASE",a,b,c,d))].join("\n");
+  return`${hdr}\n${tbl}\n  0\nSECTION\n  2\nENTITIES\n${ents}\n  0\nENDSEC\n  0\nEOF`;
+}
+
+function genDXFSlotted(L,W,H,geo,extraCuts=[],extraCreases=[]){
+  const{g,topH,btmH,tMn,bMn,xs}=geo;
+  const[x0,x1,x2,x3,x4,x5]=xs;
+  const y0=0,y1=btmH,y2=btmH+H,y3=btmH+H+topH;
+  const cuts=[],cr=[];
+  cuts.push([x0,y0,x5,y0],[x5,y0,x5,y3],[x5,y3,x0,y3],[x0,y3,x0,y0]);
+  cuts.push([x1,y1,x1,y2]);
+  if(btmH>0)[x1,x2,x3,x4].forEach(x=>cuts.push([x,y0,x,y1]));
+  if(topH>0)[x1,x2,x3,x4].forEach(x=>cuts.push([x,y2,x,y3]));
+  if(btmH>0&&bMn<btmH){cuts.push([x1,bMn,x2,bMn]);cuts.push([x3,bMn,x4,bMn]);}
+  if(topH>0&&tMn<topH){const ty=y2+tMn;cuts.push([x1,ty,x2,ty]);cuts.push([x3,ty,x4,ty]);}
+  [x2,x3,x4].forEach(x=>cr.push([x,y1,x,y2]));
+  if(btmH>0)cr.push([x1,y1,x5,y1]);
+  if(topH>0)cr.push([x1,y2,x5,y2]);
+  return assembleDXF(cuts.concat(extraCuts),cr.concat(extraCreases));
+}
+function genDXFTray(L,W,H){
+  const x0=0,x1=H,x2=H+L,x3=H+L+H,y0=0,y1=H,y2=H+W,y3=H+W+H;
+  const cuts=[[x1,y0,x2,y0],[x2,y0,x2,y1],[x2,y1,x3,y1],[x3,y1,x3,y2],[x3,y2,x2,y2],[x2,y2,x2,y3],[x2,y3,x1,y3],[x1,y3,x1,y2],[x1,y2,x0,y2],[x0,y2,x0,y1],[x0,y1,x1,y1],[x1,y1,x1,y0]];
+  const cr=[[x1,y1,x2,y1],[x1,y2,x2,y2],[x1,y1,x1,y2],[x2,y1,x2,y2]];
+  return assembleDXF(cuts,cr);
+}
+async function copyDXFText(txt){await navigator.clipboard.writeText(txt);}
+function downloadDXF(txt, filename){
+  const blob=new Blob([txt],{type:"application/octet-stream"});
+  if(window.navigator?.msSaveOrOpenBlob){
+    window.navigator.msSaveOrOpenBlob(blob,filename||"hookepak.dxf");
+    return;
+  }
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;a.download=filename||"hookepak.dxf";
+  a.rel="noopener";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},800);
+}
+
+// ─── In-context design geometry ingest (phase 1) ─────────────────────────────
+const CAD_LIBS={
+  OBJ:"https://unpkg.com/three@0.159.0/examples/js/loaders/OBJLoader.js",
+  STL:"https://unpkg.com/three@0.159.0/examples/js/loaders/STLLoader.js",
+  GLTF:"https://unpkg.com/three@0.159.0/examples/js/loaders/GLTFLoader.js",
+  CONVEX:"https://unpkg.com/three@0.159.0/examples/js/math/ConvexHull.js",
+};
+let _ocModulePromise=null;
+
+function loadExternalScript(src){
+  return new Promise((resolve,reject)=>{
+    const existing=[...document.querySelectorAll("script")].find(s=>s.src===src);
+    if(existing){resolve();return;}
+    const s=document.createElement("script");
+    s.src=src;s.async=true;
+    s.onload=()=>resolve();
+    s.onerror=()=>reject(new Error(`Failed to load script: ${src}`));
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureCadLoaders(kind){
+  const needs={obj:CAD_LIBS.OBJ,stl:CAD_LIBS.STL,gltf:CAD_LIBS.GLTF};
+  const ctorMap={obj:"OBJLoader",stl:"STLLoader",gltf:"GLTFLoader"};
+  if(kind==="hull"&&!THREE.ConvexHull)await loadExternalScript(CAD_LIBS.CONVEX);
+  if(needs[kind]&&!THREE[ctorMap[kind]])await loadExternalScript(needs[kind]);
+}
+
+async function ensureOpenCascade(){
+  if(_ocModulePromise)return _ocModulePromise;
+  // In this browser-standalone build we lazy-import oc.js from CDN.
+  _ocModulePromise=import("https://cdn.jsdelivr.net/npm/opencascade.js@2.0.0/dist/index.js")
+    .then(m=>m.default?m.default():m)
+    .catch(err=>{_ocModulePromise=null;throw err;});
+  return _ocModulePromise;
+}
+
+function meshBounds(mesh){
+  const box=new THREE.Box3().setFromObject(mesh);
+  const size=box.getSize(new THREE.Vector3());
+  return{L:size.x,H:size.y,W:size.z,box};
+}
+
+function worldVerticesFromMesh(mesh){
+  const out=[];
+  mesh.updateWorldMatrix(true,true);
+  mesh.traverse(obj=>{
+    if(!obj.isMesh||!obj.geometry?.attributes?.position)return;
+    const pos=obj.geometry.attributes.position;
+    for(let i=0;i<pos.count;i++){
+      const v=new THREE.Vector3().fromBufferAttribute(pos,i).applyMatrix4(obj.matrixWorld);
+      out.push(v);
+    }
+  });
+  return out;
+}
+
+async function computeConvexHullForMesh(mesh){
+  await ensureCadLoaders("hull");
+  if(!THREE.ConvexHull)return null;
+  const pts=worldVerticesFromMesh(mesh);
+  if(pts.length<4)return null;
+  const hull=new THREE.ConvexHull().setFromPoints(pts);
+  return{hull,pointCount:pts.length};
+}
+
+async function loadMeshFromCadFile(file){
+  const ext=(file?.name?.split(".").pop()||"").toLowerCase();
+  if(!file)throw new Error("No file provided");
+  const readText=()=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result||""));r.onerror=()=>rej(r.error||new Error("Read failed"));r.readAsText(file);});
+  const readArrayBuffer=()=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=()=>rej(r.error||new Error("Read failed"));r.readAsArrayBuffer(file);});
+  if(ext==="obj"){
+    await ensureCadLoaders("obj");
+    const txt=await readText();
+    const obj=new THREE.OBJLoader().parse(txt);
+    const g=new THREE.Group();g.add(obj);
+    return{kind:"obj",root:g};
+  }
+  if(ext==="stl"){
+    const buf=await readArrayBuffer();
+    const geom=parseSTLBuffer(buf);
+    const mat=new THREE.MeshStandardMaterial({color:0x9CA3AF,roughness:0.6,metalness:0.1});
+    const mesh=new THREE.Mesh(geom,mat);
+    const g=new THREE.Group();g.add(mesh);
+    return{kind:"stl",root:g};
+  }
+  if(ext==="gltf"||ext==="glb"){
+    await ensureCadLoaders("gltf");
+    const loader=new THREE.GLTFLoader();
+    const url=URL.createObjectURL(file);
+    try{
+      const gltf=await new Promise((res,rej)=>loader.load(url,res,undefined,rej));
+      const g=new THREE.Group();g.add(gltf.scene);
+      return{kind:ext,root:g,raw:gltf};
+    }finally{
+      URL.revokeObjectURL(url);
+    }
+  }
+  if(ext==="step"||ext==="stp"){
+    // STEP parsing requires OCCT triangulation. Hook up in phase 2 UI flow.
+    const oc=await ensureOpenCascade();
+    return{kind:"step",root:null,oc,note:"STEP runtime loaded; mesh triangulation wiring next."};
+  }
+  throw new Error(`Unsupported CAD format: .${ext}`);
+}
+
+function parseSTLBuffer(buffer){
+  const bytes=new Uint8Array(buffer);
+  const header=(new TextDecoder().decode(bytes.slice(0,80))||"").trim().toLowerCase();
+  const faceCount=new DataView(buffer).getUint32(80,true);
+  const expectedSize=84+(faceCount*50);
+  const isBinary=expectedSize===bytes.length;
+  if(isBinary)return parseBinarySTL(buffer);
+  if(header.startsWith("solid"))return parseAsciiSTL(new TextDecoder().decode(bytes));
+  // fallback: try binary first, then ascii
+  try{return parseBinarySTL(buffer);}catch{return parseAsciiSTL(new TextDecoder().decode(bytes));}
+}
+function parseBinarySTL(buffer){
+  const dv=new DataView(buffer);
+  const faces=dv.getUint32(80,true);
+  const verts=new Float32Array(faces*9);
+  let off=84,vi=0;
+  for(let i=0;i<faces;i++){
+    off+=12; // normal
+    for(let v=0;v<3;v++){
+      verts[vi++]=dv.getFloat32(off,true);off+=4;
+      verts[vi++]=dv.getFloat32(off,true);off+=4;
+      verts[vi++]=dv.getFloat32(off,true);off+=4;
+    }
+    off+=2; // attr byte count
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.BufferAttribute(verts,3));
+  g.computeVertexNormals();
+  return g;
+}
+function parseAsciiSTL(text){
+  const nums=[...text.matchAll(/vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)/g)];
+  if(!nums.length)throw new Error("Could not parse STL");
+  const verts=new Float32Array(nums.length*3);
+  let i=0;
+  for(const m of nums){
+    verts[i++]=Number(m[1]);verts[i++]=Number(m[2]);verts[i++]=Number(m[3]);
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.BufferAttribute(verts,3));
+  g.computeVertexNormals();
+  return g;
+}
+
+// ─── Packing algorithms (from HookePakIntegratedApp) ─────────────────────────
+function orientationsForProduct(product){
+  if(product.type==="box"){
+    const dims=[product.L,product.W,product.H];
+    const perms=[[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]].map(([a,b,c])=>[dims[a],dims[b],dims[c]]);
+    const seen=new Set();
+    return perms.filter(p=>{const k=uniqKey(p);if(seen.has(k))return false;seen.add(k);return true;})
+      .map(([L,W,H])=>({kind:"box",L,W,H,label:`${L}x${W}x${H}`}));
+  }
+  if(product.type==="cylinder"){
+    const{diameter:d,H}=product;
+    return[
+      {kind:"cylinder-upright",footprintL:d,footprintW:d,H,diameter:d,label:`upright dia${d}`},
+      {kind:"cylinder-side",footprintL:H,footprintW:d,H:d,diameter:d,length:H,label:`side ${H}xdia${d}`},
+    ];
+  }
+  return[];
+}
+function productUnitVolume(product,orient){
+  if(product.type==="box")return orient.L*orient.W*orient.H;
+  const r=product.diameter/2;return Math.PI*r*r*product.H;
+}
+function generateGridPattern(box,product,orient){
+  const gap=product.gap??0;
+  const cellL=(product.type==="box"?orient.L:orient.footprintL)+gap;
+  const cellW=(product.type==="box"?orient.W:orient.footprintW)+gap;
+  const cellH=(product.type==="box"?orient.H:orient.H)+gap;
+  const nx=Math.max(0,Math.floor((box.L+gap)/cellL));
+  const ny=Math.max(0,Math.floor((box.W+gap)/cellW));
+  const nz=Math.max(0,Math.floor((box.H+gap)/cellH));
+  const usedL=nx>0?nx*cellL-gap:0,usedW=ny>0?ny*cellW-gap:0;
+  const originX=-usedL/2,originZ=-usedW/2,originY=-box.H/2+(cellH-gap)/2;
+  const placements=[];
+  for(let k=0;k<nz;k++)for(let j=0;j<ny;j++)for(let i=0;i<nx;i++)
+    placements.push({x:originX+i*cellL+(cellL-gap)/2,y:originY+k*cellH,z:originZ+j*cellW+(cellW-gap)/2,orientation:orient});
+  return{id:`grid-${orient.label}`,name:`Grid · ${orient.label}`,strategy:"grid",count:placements.length,nx,ny,nz,placements};
+}
+function generateBrickPattern(box,product,orient){
+  if(product.type!=="box")return null;
+  const gap=product.gap??0;
+  const{L:pL,W:pW,H:pH}=orient;
+  const cellH=pH+gap,nz=Math.max(0,Math.floor((box.H+gap)/cellH));
+  const placements=[];
+  for(let layer=0;layer<nz;layer++){
+    const offset=layer%2===0?0:(pL+gap)/2;
+    const nx=Math.max(0,Math.floor((box.L-offset+gap)/(pL+gap)));
+    const ny=Math.max(0,Math.floor((box.W+gap)/(pW+gap)));
+    const usedL=nx>0?nx*(pL+gap)-gap:0,usedW=ny>0?ny*(pW+gap)-gap:0;
+    const startX=-usedL/2+offset,startZ=-usedW/2;
+    const y=-box.H/2+pH/2+layer*cellH;
+    for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){
+      const x=startX+i*(pL+gap);
+      if(x+pL/2>box.L/2||x-pL/2<-box.L/2)continue;
+      placements.push({x,y,z:startZ+j*(pW+gap)+pW/2,orientation:orient});
+    }
+  }
+  return{id:`brick-${orient.label}`,name:`Brick · ${orient.label}`,strategy:"brick",count:placements.length,placements};
+}
+function enrichFill(pattern,box,product){
+  if(!pattern||pattern.count<=0)return null;
+  const boxVol=box.L*box.W*box.H;
+  const firstOrient=pattern.placements[0]?.orientation;
+  const unitVol=firstOrient?productUnitVolume(product,firstOrient):0;
+  const utilisation=boxVol>0?(unitVol*pattern.count)/boxVol:0;
+  return{...pattern,utilisation};
+}
+function buildFillPatterns(box,product){
+  const out=[];
+  orientationsForProduct(product).forEach(orient=>{
+    const g=generateGridPattern(box,product,orient);if(g?.count>0)out.push(enrichFill(g,box,product));
+    const b=generateBrickPattern(box,product,orient);if(b?.count>0)out.push(enrichFill(b,box,product));
+  });
+  return out.filter(Boolean).sort((a,b)=>b.count!==a.count?b.count-a.count:(b.utilisation||0)-(a.utilisation||0));
+}
+
+// ─── Pallet placement engine ───────────────────────────────────────────────
+// Each pattern returns layerTemplates: array of layer configs.
+// Pallet3D uses layerTemplates[k % layerTemplates.length] for layer k.
+// Each placement: { x, z, rotated } — x/z in mm from pallet centre.
+
+function mkLayerPlacements(pallet, carton, rotated, gap){
+  const cL=rotated?carton.W:carton.L, cW=rotated?carton.L:carton.W;
+  const nx=Math.max(0,Math.floor(pallet.L/cL));
+  const ny=Math.max(0,Math.floor(pallet.W/cW));
+  // Center the tight grid on the pallet so leftover slack is split left/right
+  // (corner-anchored packing leaves one-sided gaps when nx*cL < pallet.L).
+  const usedL=nx>0?nx*(cL+gap)-gap:0;
+  const usedW=ny>0?ny*(cW+gap)-gap:0;
+  const startX=-usedL/2+cL/2;
+  const startZ=-usedW/2+cW/2;
+  const placements=[];
+  for(let j=0;j<ny;j++) for(let i=0;i<nx;i++)
+    placements.push({x:startX+i*(cL+gap), z:startZ+j*(cW+gap), rotated});
+  return{placements, nx, ny, count:nx*ny};
+}
+
+function mkPinwheelLayer(pallet, carton, gap){
+  const quad=(x0,x1,z0,z1,rotated)=>{
+    const cL=rotated?carton.W:carton.L;
+    const cW=rotated?carton.L:carton.W;
+    const Wreg=x1-x0,Zreg=z1-z0;
+    const nx=Math.max(0,Math.floor(Wreg/cL));
+    const nz=Math.max(0,Math.floor(Zreg/cW));
+    const usedX=nx>0?nx*(cL+gap)-gap:0;
+    const usedZ=nz>0?nz*(cW+gap)-gap:0;
+    const marginX=nx>0?(Wreg-usedX)/2:0;
+    const marginZ=nz>0?(Zreg-usedZ)/2:0;
+    const startX=x0+marginX+cL/2;
+    const startZ=z0+marginZ+cW/2;
+    const out=[];
+    for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){
+      const x=startX+i*(cL+gap);
+      const z=startZ+j*(cW+gap);
+      out.push({x,z,rotated});
+    }
+    return out;
+  };
+  const halfL=pallet.L/2, halfW=pallet.W/2;
+  const placements=[
+    ...quad(-halfL,0,-halfW,0,false), // top-left normal
+    ...quad(0,halfL,-halfW,0,true),   // top-right rotated
+    ...quad(0,halfL,0,halfW,false),   // bottom-right normal
+    ...quad(-halfL,0,0,halfW,true),   // bottom-left rotated
+  ].filter(p=>{
+    const bL=p.rotated?carton.W:carton.L;
+    const bW=p.rotated?carton.L:carton.W;
+    return Math.abs(p.x)+bL/2<=halfL+1e-6 && Math.abs(p.z)+bW/2<=halfW+1e-6;
+  });
+  const nx=Math.max(0,Math.floor(pallet.L/carton.L));
+  const ny=Math.max(0,Math.floor(pallet.W/carton.W));
+  return{placements,nx,ny,count:placements.length};
+}
+
+function chooseBestColumnLayer(pallet,carton,gap){
+  const normal=mkLayerPlacements(pallet,carton,false,gap);
+  const rotated=mkLayerPlacements(pallet,carton,true,gap);
+  if(normal.count>=rotated.count)return normal;
+  return rotated;
+}
+
+function compressionLabel(strategy){
+  if(strategy==="column")return"High (column stacking)";
+  if(strategy==="interlocked")return"Medium-High (interlocked)";
+  return"Medium (pinwheel)";
+}
+
+function patternHasMixedOrientations(pattern){
+  const set=new Set();
+  (pattern?.layerTemplates||[]).forEach(t=>(t.placements||[]).forEach(p=>set.add(p.rotated?"r":"n")));
+  return set.size>1 || pattern?.strategy==="interlocked";
+}
+
+function buildPalletPatterns(pallet,carton,gap=0){
+  if(!carton.H||carton.H<=0)return[];
+  const DECK_H=144;
+  const availH=Math.max(0,pallet.maxH-DECK_H);
+  const maxLayers=Math.max(0,Math.floor(availH/carton.H));
+  const palletVol=pallet.L*pallet.W*availH;
+  const cartonVol=carton.L*carton.W*carton.H;
+
+  const layerNormal=mkLayerPlacements(pallet,carton,false,gap);
+  const layerRotated=mkLayerPlacements(pallet,carton,true,gap);
+  const layerColumn=chooseBestColumnLayer(pallet,carton,gap);
+  const layerPinwheel=mkPinwheelLayer(pallet,carton,gap);
+  const interLayerCount=Math.round((layerNormal.count+layerRotated.count)/2);
+
+  const patterns=[
+    {
+      id:"column",
+      name:"Column/Block",
+      description:"Highest compression strength. Corners stack on corners.",
+      strategy:"column",
+      layerTemplates:[layerColumn],
+      layerCount:layerColumn.count,
+      nx:layerColumn.nx,
+      ny:layerColumn.ny,
+    },
+    {
+      id:"interlocked",
+      name:"Interlocked/Brick",
+      description:"Alternating 90° rotation each layer. Highest stability for transit.",
+      strategy:"interlocked",
+      layerTemplates:[layerNormal,layerRotated],
+      layerCount:interLayerCount,
+      nx:Math.max(layerNormal.nx,layerRotated.nx),
+      ny:Math.max(layerNormal.ny,layerRotated.ny),
+    },
+    {
+      id:"pinwheel",
+      name:"Pinwheel",
+      description:"Rotational arrangement per layer. Best for stability with mixed loads.",
+      strategy:"pinwheel",
+      layerTemplates:[layerPinwheel],
+      layerCount:layerPinwheel.count,
+      nx:layerPinwheel.nx,
+      ny:layerPinwheel.ny,
+    },
+  ];
+
+  return patterns.map(p=>{
+    const totalCartons=p.layerCount*maxLayers;
+    const utilisation=palletVol>0?(totalCartons*cartonVol)/palletVol:0;
+    return{...p,maxLayers,totalCartons,utilisation,availH};
+  }).sort((a,b)=>b.totalCartons!==a.totalCartons?b.totalCartons-a.totalCartons:(b.utilisation||0)-(a.utilisation||0));
+}
+
+// ─── Shared UI atoms ──────────────────────────────────────────────────────────
+function Card({title,value,sub,color=T.text}){
+  return(
+    <div style={{padding:12,border:`1px solid ${T.border}`,borderRadius:12,background:T.bg}}>
+      <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>{title}</div>
+      <div style={{fontSize:20,fontWeight:800,color,marginTop:5}}>{value}</div>
+      {sub&&<div style={{fontSize:10,color:T.textMid,marginTop:3}}>{sub}</div>}
+    </div>
+  );
+}
+function Field({label,value,onChange,min=1,step=1}){
+  return(
+    <label style={{display:"grid",gap:4}}>
+      <span style={{fontSize:9,color:T.textLight}}>{label}</span>
+      <input type="number" min={min} step={step} value={value} onChange={e=>onChange(Number(e.target.value))}
+        style={{padding:"8px 10px",borderRadius:8,border:`1px solid ${T.border}`,background:"white",fontSize:12,outline:"none"}}/>
+    </label>
+  );
+}
+function SelectField({label,value,onChange,options}){
+  return(
+    <label style={{display:"grid",gap:4}}>
+      <span style={{fontSize:9,color:T.textLight}}>{label}</span>
+      <select value={value} onChange={e=>onChange(e.target.value)}
+        style={{padding:"8px 10px",borderRadius:8,border:`1px solid ${T.border}`,background:"white",fontSize:12,outline:"none"}}>
+        {options.map(o=>typeof o==="string"
+          ?<option key={o} value={o}>{o}</option>
+          :<option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+    </label>
+  );
+}
+function PatternRow({p,active,isBest,onClick,rightValue,rightLabel}){
+  return(
+    <button onClick={onClick} style={{
+      textAlign:"left",border:`1px solid ${active?T.purple:isBest?T.green:T.border}`,
+      background:active?T.purpleLight:isBest?"#ECFDF5":"white",
+      borderRadius:10,padding:"9px 12px",cursor:"pointer",width:"100%",
+    }}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:8}}>
+        <div>
+          <div style={{fontSize:11,fontWeight:700,color:active?T.purple:T.text}}>{p.name}{isBest?" · Best":""}</div>
+          <div style={{fontSize:9,color:T.textMid,marginTop:2}}>{p.strategy}</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:17,fontWeight:800,color:T.green}}>{rightValue}</div>
+          <div style={{fontSize:8,color:T.textLight}}>{rightLabel}</div>
+        </div>
+      </div>
+    </button>
+  );
+}
+function Slider({label,value,min,max,color,onChange,glow}){
+  const pct=((value-min)/(max-min))*100;
+  return(
+    <div style={{padding:"9px 14px",background:T.surface,borderRadius:10,marginBottom:8,border:`1px solid ${glow?color+"55":T.border}`,boxShadow:glow?`0 0 0 3px ${color}15`:"none",transition:"all .2s"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+        <span style={{fontSize:11,color:glow?color:T.textMid,fontFamily:"monospace"}}>{label}</span>
+        <span style={{fontSize:16,color:glow?color:T.text,fontFamily:"monospace",fontWeight:"700"}}>{value}<span style={{fontSize:9,color:T.textLight,fontWeight:"400"}}> mm</span></span>
+      </div>
+      <div style={{position:"relative",height:20,display:"flex",alignItems:"center"}}>
+        <div style={{position:"absolute",left:0,right:0,height:3,background:T.border,borderRadius:2}}/>
+        <div style={{position:"absolute",left:0,width:`${pct}%`,height:3,background:color,borderRadius:2}}/>
+        <input type="range" min={min} max={max} step={5} value={value} onChange={e=>onChange(Number(e.target.value))}
+          style={{position:"absolute",left:0,right:0,width:"100%",WebkitAppearance:"none",appearance:"none",background:"transparent",cursor:"pointer",height:20,margin:0}}/>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:T.textLight,fontFamily:"monospace",marginTop:1}}><span>{min}</span><span>{max}</span></div>
+    </div>
+  );
+}
+
+// ─── Box3D 3D engine (hinge-chain, kraft appearance) ───────────────────────────
+const SC    = 0.005;
+const PIH   = Math.PI / 2;
+const ease  = t => t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+const lrp   = (a, b, t) => a + (b - a) * t;
+
+// ─── ArtiosCAD-style kraft colours ───────────────────────────────────────────
+const K = {
+  outerFace : 0xCC9F58,
+  sideWall  : 0xC49348,
+  innerFlap : 0xBB8C44,
+  minorFlap : 0xB08640,
+  glueTab   : 0xA87C36,
+  base      : 0xC89850,
+  lidWall   : 0xB89048,
+};
+
+function mkMat(col) {
+  return new THREE.MeshStandardMaterial({ color:col, roughness:0.90, metalness:0, side:THREE.DoubleSide });
+}
+function mkMesh(wMm, hMm, dMm, col) {
+  return new THREE.Mesh(new THREE.BoxGeometry(wMm*SC, hMm*SC, dMm*SC), mkMat(col));
+}
+
+// ─── Clear group ──────────────────────────────────────────────────────────────
+function clearGroup(g) {
+  while (g.children.length) {
+    const c = g.children[0];
+    c.traverse?.(n=>{
+      if (n.geometry) n.geometry.dispose();
+      if (n.material) (Array.isArray(n.material)?n.material:[n.material]).forEach(m=>m.dispose?.());
+    });
+    g.remove(c);
+  }
+}
+
+function applyUnit(bbox, unit){
+  if(!bbox)return null;
+  const factors={mm:1,cm:10,inches:25.4,m:1000};
+  const f=factors[unit]||1;
+  return{
+    L:Math.round(bbox.L*f*10)/10,
+    W:Math.round(bbox.W*f*10)/10,
+    H:Math.round(bbox.H*f*10)/10,
+  };
+}
+function mapBoardName(rec=""){
+  const t=String(rec).toLowerCase();
+  if(t.includes("bc"))return "BC double";
+  if(t.includes("c-flute")||t.includes(" c "))return "C-flute";
+  if(t.includes("e-flute")||t.includes(" e "))return "E-flute";
+  if(t.includes("solid"))return "Solid board";
+  return "B-flute";
+}
+async function parseProductFile(file){
+  const ext=(file?.name?.split(".").pop()||"").toLowerCase();
+  let geometry=null;
+  if(ext==="stl"){
+    geometry=parseSTLBuffer(await file.arrayBuffer());
+  }else if(ext==="obj"||ext==="glb"||ext==="gltf"){
+    const loaded=await loadMeshFromCadFile(file);
+    loaded?.root?.traverse(child=>{if(child.isMesh&&!geometry)geometry=child.geometry;});
+  }else{
+    throw new Error("Unsupported format");
+  }
+  if(!geometry)throw new Error("Could not extract mesh geometry");
+  geometry.computeBoundingBox();
+  const bbox=geometry.boundingBox;
+  const size=new THREE.Vector3();bbox.getSize(size);
+  const rawL=size.x,rawH=size.y,rawW=size.z;
+  const maxDim=Math.max(rawL,rawH,rawW);
+  let detectedUnit="mm";
+  if(maxDim<0.1)detectedUnit="m";
+  else if(maxDim<2.5)detectedUnit="inches";
+  else if(maxDim<25)detectedUnit="cm";
+  else detectedUnit="mm";
+  return{geometry,mesh:new THREE.Mesh(geometry),bbox:{L:rawL,W:rawW,H:rawH},detectedUnit};
+}
+async function inferPackagingFromProduct(bbox, filename, clearance){
+  const c=typeof clearance==="number"
+    ?{top:clearance,bottom:clearance,left:clearance,right:clearance,front:clearance,back:clearance}
+    :clearance;
+  const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:400,
+      system:"You are an expert packaging engineer. Given a product bounding box and filename, suggest the optimal corrugated shipping carton configuration. Return ONLY valid JSON, no other text.",
+      messages:[{role:"user",content:`Product file: ${filename}
+Bounding box: L=${bbox.L}mm W=${bbox.W}mm H=${bbox.H}mm
+Clearance by face (mm): top=${c.top} bottom=${c.bottom} left=${c.left} right=${c.right} front=${c.front} back=${c.back}
+
+Return JSON:
+{
+  productGuess: string,
+  confidence: 'high'|'medium'|'low',
+  fefcoStyle: string,
+  fefcoStyleName: string,
+  innerL: number,
+  innerW: number,
+  innerH: number,
+  boardRecommendation: string,
+  reasoning: string,
+  orientationNote: string
+}
+
+innerL = bbox.L + left + right, innerW = bbox.W + front + back, innerH = bbox.H + top + bottom.
+Round to nearest 5mm.
+fefcoStyle should be one of: 0201, 0202, 0203, 0204, 0215, 0300, 0713.`}]})});
+  const data=await res.json();
+  const txt=(data.content?.find(b=>b.type==="text")?.text||"").trim();
+  return JSON.parse(txt);
+}
+
+// ─── Flap config per FEFCO style ─────────────────────────────────────────────
+function getFlapCfg(style, W) {
+  const h = W / 2;
+  switch (style) {
+    case "0202": { const ov=Math.max(10,W*0.08); return {tMj:h+ov,tMn:W*0.25,bMj:h+ov,bMn:W*0.25,open:false,cap:1}; }
+    case "0203": return {tMj:h,tMn:W/3,bMj:h,bMn:W/3,open:false,cap:1};
+    case "0204": return {tMj:0,tMn:0,bMj:h,bMn:h,open:true,cap:1};
+    case "0206": return {tMj:W/4,tMn:W/4,bMj:W/4,bMn:W/4,open:false,cap:1};
+    case "0215": return {tMj:W,tMn:h,bMj:W,bMn:h,open:false,cap:1};
+    case "0301": return {tMj:0,tMn:0,bMj:h,bMn:h,open:true,cap:1};
+    default:     return {tMj:h,tMn:h,bMj:h,bMn:h,open:false,cap:1};
+  }
+}
+
+// ─── SLOTTED FAMILY ───────────────────────────────────────────────────────────
+//
+// Hinge-chain architecture — panels are children of the previous panel's edge group
+// so they physically rotate around their crease lines:
+//
+//  cartonGroup
+//  └── frontGroup  (FIXED at z=-W/2 throughout animation)
+//      ├── frontMesh
+//      ├── fbHinge  (front-bottom, rotates X: 0→-PIH)
+//      ├── ftHinge  (front-top,    rotates X: 0→+PIH)
+//      └── leftHinge (at x=-L/2,  rotates Y: 0→+PIH) ← panel unfolds leftward in flat state
+//          ├── side1Mesh (at local x=-W/2)
+//          ├── s1bHinge, s1tHinge
+//          └── backHinge (at local x=-W, rotates Y: 0→+PIH)
+//              ├── backMesh (at local x=-L/2)
+//              ├── bkbHinge, bktHinge
+//              └── rightHinge (at local x=-L, rotates Y: 0→+PIH)
+//                  ├── side2Mesh (at local x=-W/2)
+//                  ├── s2bHinge, s2tHinge
+//                  └── glueHinge (at local x=-W, rotates Y: 0→PIH*1.04)
+//                      └── glueMesh (at local x=-g/2)
+//
+// At t=0 (flat): all Y-hinges=0 → all panels coplanar in the z=-W/2 plane,
+//   spreading leftward: glue–side2–back–side1–FRONT.
+// At t=1 (erected): all Y-hinges=PIH → rectangular tube.
+// Flap X-hinges: bottom 0→-PIH, top 0→+PIH, minor flaps capped at `cap` fraction.
+//
+function buildSlotted(L, W, H, style, bT, group) {
+  const { tMj, tMn, bMj, bMn, open, cap } = getFlapCfg(style, W);
+  const g = Math.max(28, Math.round(W * 0.12));
+
+  // Add flap hinge + mesh attached to `parent`
+  // lx, ly = hinge position in parent local frame (mm)
+  // moff   = mesh Y-centre offset from hinge (mm)
+  // fw, fh = flap face dimensions (mm)
+  const mkFlap = (parent, lx, ly, moff, fw, fh, col) => {
+    if (fh <= 0) return null;
+    const hinge = new THREE.Group();
+    hinge.position.set(lx*SC, ly*SC, 0);
+    parent.add(hinge);
+    const mesh = mkMesh(fw, fh, bT, col);
+    mesh.position.y = moff * SC;
+    hinge.add(mesh);
+    return hinge;
+  };
+
+  // ── Front panel (fixed reference at z = -W/2) ────────────────────────────
+  const fg = new THREE.Group();
+  fg.position.z = -W/2 * SC;
+  group.add(fg);
+  fg.add(mkMesh(L, H, bT, K.outerFace));
+
+  const fbH = mkFlap(fg, 0, -H/2, -bMj/2, L, bMj, K.innerFlap);   // front bottom major
+  const ftH = open ? null : mkFlap(fg, 0, H/2, tMj/2, L, tMj, K.innerFlap); // front top major
+
+  // ── Left hinge (at front panel's left crease x=-L/2) ────────────────────
+  const lH = new THREE.Group(); lH.position.x = -L/2*SC; fg.add(lH);
+  const s1 = mkMesh(W, H, bT, K.sideWall); s1.position.x = -W/2*SC; lH.add(s1);
+  const s1bH = mkFlap(lH, -W/2, -H/2, -bMn/2, W, bMn, K.minorFlap);
+  const s1tH = open ? null : mkFlap(lH, -W/2, H/2, tMn/2, W, tMn, K.minorFlap);
+
+  // ── Back hinge (at left panel's far crease x=-W inside leftHinge) ────────
+  const bkH = new THREE.Group(); bkH.position.x = -W*SC; lH.add(bkH);
+  const bk = mkMesh(L, H, bT, K.outerFace); bk.position.x = -L/2*SC; bkH.add(bk);
+  const bkbH = mkFlap(bkH, -L/2, -H/2, -bMj/2, L, bMj, K.innerFlap);
+  const bktH = open ? null : mkFlap(bkH, -L/2, H/2, tMj/2, L, tMj, K.innerFlap);
+
+  // ── Right hinge (at back panel's far crease x=-L inside backHinge) ───────
+  const rH = new THREE.Group(); rH.position.x = -L*SC; bkH.add(rH);
+  const s2 = mkMesh(W, H, bT, K.sideWall); s2.position.x = -W/2*SC; rH.add(s2);
+  const s2bH = mkFlap(rH, -W/2, -H/2, -bMn/2, W, bMn, K.minorFlap);
+  const s2tH = open ? null : mkFlap(rH, -W/2, H/2, tMn/2, W, tMn, K.minorFlap);
+
+  // ── Glue hinge ────────────────────────────────────────────────────────────
+  const gH = new THREE.Group(); gH.position.x = -W*SC; rH.add(gH);
+  const gt = mkMesh(g, H, bT, K.glueTab); gt.position.x = -g/2*SC; gH.add(gt);
+
+  // ── Animate(t) ────────────────────────────────────────────────────────────
+  return (t) => {
+    // Body: all four Y-hinges 0→PIH (t 0→0.52)
+    const bdy = ease(clamp(t / 0.52, 0, 1)) * PIH;
+    lH.rotation.y = bdy;  bkH.rotation.y = bdy;
+    rH.rotation.y = bdy;  gH.rotation.y  = bdy * 1.04;
+
+    // Bottom minor flaps (fold in FIRST, fully closed before major begins)
+    const bmn = -ease(clamp((t-0.20)/0.32,0,1)) * PIH * cap;
+    if (s1bH) s1bH.rotation.x = bmn;
+    if (s2bH) s2bH.rotation.x = bmn;
+
+    // Bottom major flaps (start only after minors are mostly in)
+    const bmj = -ease(clamp((t-0.42)/0.28,0,1)) * PIH * 0.98;
+    if (fbH)  fbH.rotation.x  = bmj;
+    if (bkbH) bkbH.rotation.x = bmj;
+    // Overlap styles: stack second major flap by bT so it sits ON TOP of first
+    if (bkbH && bMj > W/2) bkbH.position.z = ease(clamp((t-0.32)/0.36,0,1)) * bT * SC;
+
+    // Top minor flaps (fold in FIRST)
+    const tmn = ease(clamp((t-0.56)/0.26,0,1)) * PIH * cap;
+    if (s1tH) s1tH.rotation.x = tmn;
+    if (s2tH) s2tH.rotation.x = tmn;
+
+    // Top major flaps (start only after top minors are mostly in)
+    const tmj = ease(clamp((t-0.72)/0.28,0,1)) * PIH * 0.98;
+    if (ftH)  ftH.rotation.x  = tmj;
+    if (bktH) bktH.rotation.x = tmj;
+    if (bktH && tMj > W/2) bktH.position.z = -ease(clamp((t-0.65)/0.35,0,1)) * bT * SC;
+  };
+}
+
+// ─── TRAY (0300) ──────────────────────────────────────────────────────────────
+// Base is the fixed reference (lying flat). Four walls hinge from the base edges.
+//
+//  cartonGroup
+//  └── baseGroup  (at y=-H/2)
+//      ├── baseMesh  (lying flat, rotation.x=PIH)
+//      ├── fwH  (front-wall hinge at z=+W/2, rotates X: +PIH→0)
+//      ├── bwH  (back-wall  hinge at z=-W/2, rotates X: -PIH→0)
+//      ├── lwH  (left-wall  hinge at x=-L/2, rotates Z: +PIH→0)
+//      └── rwH  (right-wall hinge at x=+L/2, rotates Z: -PIH→0)
+//
+function buildTray(L, W, H, bT, group) {
+  const bg = new THREE.Group();
+  bg.position.y = -H/2 * SC;
+  group.add(bg);
+
+  // Base lying flat
+  const bm = mkMesh(L, W, bT, K.base); bm.rotation.x = PIH; bg.add(bm);
+
+  // Front/back walls: BoxGeometry(L,H,bT), hinge on base edge, mesh extends upward
+  const mkLWall = (lz, xrot_flat) => {
+    const h = new THREE.Group(); h.position.set(0, 0, lz*SC); bg.add(h);
+    h.rotation.x = xrot_flat;
+    const m = mkMesh(L, H, bT, K.sideWall); m.position.y = H/2*SC; h.add(m);
+    return h;
+  };
+  const fwH = mkLWall( W/2,  PIH);
+  const bwH = mkLWall(-W/2, -PIH);
+
+  // Left/right walls: BoxGeometry(bT,H,W) — bT along X (thin), H along Y, W along Z
+  // hinge on base x-edge, mesh extends upward, rotates around Z axis
+  const mkSWall = (lx, zrot_flat) => {
+    const h = new THREE.Group(); h.position.set(lx*SC, 0, 0); bg.add(h);
+    h.rotation.z = zrot_flat;
+    const m = mkMesh(bT, H, W, K.sideWall);
+    m.position.set(Math.sign(lx)*bT/2*SC, H/2*SC, 0);
+    h.add(m);
+    return h;
+  };
+  const lwH = mkSWall(-L/2,  PIH);
+  const rwH = mkSWall( L/2, -PIH);
+
+  return (t) => {
+    const wT = ease(clamp(t / 0.68, 0, 1));
+    fwH.rotation.x =  PIH * (1 - wT);
+    bwH.rotation.x = -PIH * (1 - wT);
+    lwH.rotation.z =  PIH * (1 - wT);
+    rwH.rotation.z = -PIH * (1 - wT);
+  };
+}
+
+// ─── TELESCOPE (0713) ─────────────────────────────────────────────────────────
+// Base box (0204 open-top) assembled first. Lid assembled alongside (offset right
+// in flat state). In erected state lid rises to sit above the base.
+function buildTelescope(L, W, H, lidH, bT, group) {
+  const g  = Math.max(28, Math.round(W * 0.12));
+  const BW = g + 2*W + 2*L;        // one blank width
+  const gap = L * 0.5;
+
+  // Helper: build one slotted sub-box (always open-top) inside a subGroup
+  // xFlatOff: X offset of frontGroup in flat state (becomes 0 in erected)
+  const buildSub = (subGroup, bH, col1, col2, col3, xFlatOff) => {
+    const fg = new THREE.Group();
+    fg.position.set(xFlatOff*SC, 0, -W/2*SC);
+    subGroup.add(fg);
+    fg.add(mkMesh(L, bH, bT, col1));
+
+    const cap = 0.88;
+    const bMj = W/2, bMn = W/2 * 0.88;
+
+    const mkF = (par, lx, ly, moff, fw, fh, col) => {
+      if (!fh) return null;
+      const h = new THREE.Group(); h.position.set(lx*SC,ly*SC,0); par.add(h);
+      const m = mkMesh(fw,fh,bT,col); m.position.y=moff*SC; h.add(m); return h;
+    };
+
+    const fbH = mkF(fg,  0, -bH/2, -bMj/2, L, bMj, col3);
+    const lHg = new THREE.Group(); lHg.position.x=-L/2*SC; fg.add(lHg);
+    mkMesh(W,bH,bT,col2) && (() => { const m=mkMesh(W,bH,bT,col2); m.position.x=-W/2*SC; lHg.add(m); })();
+    const s1b = mkF(lHg,-W/2,-bH/2,-bMn/2,W,bMn,col3);
+    const bHg = new THREE.Group(); bHg.position.x=-W*SC; lHg.add(bHg);
+    (() => { const m=mkMesh(L,bH,bT,col1); m.position.x=-L/2*SC; bHg.add(m); })();
+    const bkb = mkF(bHg,-L/2,-bH/2,-bMj/2,L,bMj,col3);
+    const rHg = new THREE.Group(); rHg.position.x=-L*SC; bHg.add(rHg);
+    (() => { const m=mkMesh(W,bH,bT,col2); m.position.x=-W/2*SC; rHg.add(m); })();
+    const s2b = mkF(rHg,-W/2,-bH/2,-bMn/2,W,bMn,col3);
+    const ghg = new THREE.Group(); ghg.position.x=-W*SC; rHg.add(ghg);
+    (() => { const m=mkMesh(g,bH,bT,K.glueTab); m.position.x=-g/2*SC; ghg.add(m); })();
+
+    // Return animate function for this sub-box
+    return (t) => {
+      const bdy = ease(clamp(t/0.52,0,1))*PIH;
+      lHg.rotation.y=bdy; bHg.rotation.y=bdy; rHg.rotation.y=bdy; ghg.rotation.y=bdy*1.04;
+      const mn = -ease(clamp((t-0.20)/0.36,0,1))*PIH*cap;
+      if(s1b) s1b.rotation.x=mn; if(s2b) s2b.rotation.x=mn;
+      const mj = -ease(clamp((t-0.32)/0.36,0,1))*PIH;
+      if(fbH) fbH.rotation.x=mj; if(bkb) bkb.rotation.x=mj;
+      // bring fg X offset to 0 as box erects
+      fg.position.x = lrp(xFlatOff*SC, 0, ease(clamp(t/0.52,0,1)));
+    };
+  };
+
+  const baseGrp = new THREE.Group();
+  group.add(baseGrp);
+  const lidGrp = new THREE.Group();
+  group.add(lidGrp);
+
+  const animBase = buildSub(baseGrp, H,   K.outerFace, K.sideWall, K.innerFlap, 0);
+  const animLid  = buildSub(lidGrp,  lidH, K.lidWall,  K.sideWall, K.innerFlap, BW+gap);
+
+  return (t) => {
+    animBase(t);
+    animLid(t);
+    // Lid rises above base after both assembled (t 0.60→1.00)
+    const rise = ease(clamp((t-0.60)/0.40,0,1));
+    lidGrp.position.y  = lrp(0, (H/2 + lidH/2 + bT*3)*SC, rise);
+    baseGrp.position.y = lrp(0, -(lidH/2 + bT)*SC * 0.5, rise);
+  };
+}
+
+// ─── Camera framing ───────────────────────────────────────────────────────────
+function frameCamera(cam, L, W, H, style) {
+  const g      = Math.max(28, Math.round(W * 0.12));
+  const flatW  = g + 2*W + 2*L;
+  const maxDim = Math.max(flatW, H) * SC;
+  const dist   = style === "0713" ? maxDim * 2.2 : maxDim * 1.55;
+  cam.position.set(maxDim * 0.35, maxDim * 0.22, dist);
+  cam.lookAt(0, 0, 0);
+  cam.updateProjectionMatrix();
+}
+
+// ─── Box3D Component ──────────────────────────────────────────────────────────
+function Box3D({
+  L = 380, W = 260, H = 200,
+  style = "0201",
+  lidH = 60,
+  boardThickness = 4,
+  productGeometry = null,
+  productBBox = null,
+  productClearance = {top:10,bottom:10,left:8,right:8,front:8,back:8},
+  productOrientation = "upright",
+  onCollisionUpdate = null,
+}) {
+  const mountRef  = useRef(null);
+  const stRef     = useRef(null);   // Three.js state
+  const animRef   = useRef(null);   // current animate(t) fn
+  const tRef      = useRef(0);
+  const playRef   = useRef(false);
+  const dragRef   = useRef({ on:false, x:0, y:0 });
+  const autoRef   = useRef(true);
+  const rafRef    = useRef(null);
+  const productLayerRef = useRef({mat:null,wireMat:null});
+
+  const [tUI, setTUI]         = useState(0);
+  const [playing, setPlaying] = useState(false);
+
+  // Init Three.js once
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+    const W3 = mount.clientWidth || 380, H3 = 300;
+
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setSize(W3, H3);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0xF0EDE6, 1);  // warm ArtiosCAD-like background
+    mount.appendChild(renderer.domElement);
+
+    const scene  = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(36, W3/H3, 0.1, 2000);
+
+    // Warm lighting for cardboard
+    scene.add(new THREE.AmbientLight(0xFFF5E0, 0.55));
+    const key  = new THREE.DirectionalLight(0xFFF0CC, 1.05); key.position.set(80,110,70);   scene.add(key);
+    const fill = new THREE.DirectionalLight(0xCCDDFF, 0.32); fill.position.set(-60,20,-80); scene.add(fill);
+    const rim  = new THREE.DirectionalLight(0xFFE8A0, 0.18); rim.position.set(10,-60,40);   scene.add(rim);
+
+    const root   = new THREE.Group();
+    root.rotation.x = 0.30;
+    root.rotation.y = 0.20;
+    scene.add(root);
+
+    const carton = new THREE.Group();
+    root.add(carton);
+
+    stRef.current = { renderer, scene, camera, root, carton };
+
+    const el = renderer.domElement;
+    const dn = e => { dragRef.current={on:true,x:e.clientX,y:e.clientY}; autoRef.current=false; };
+    const mv = e => {
+      if (!dragRef.current.on) return;
+      root.rotation.y += (e.clientX - dragRef.current.x) * 0.013;
+      root.rotation.x  = clamp(root.rotation.x + (e.clientY - dragRef.current.y) * 0.009, -1.4, 1.4);
+      dragRef.current.x = e.clientX; dragRef.current.y = e.clientY;
+    };
+    const up = () => { dragRef.current.on = false; };
+    el.addEventListener("pointerdown", dn);
+    el.addEventListener("pointermove", mv);
+    el.addEventListener("pointerup",   up);
+    el.addEventListener("pointerleave",up);
+
+    const tick = () => {
+      rafRef.current = requestAnimationFrame(tick);
+      if (playRef.current) {
+        tRef.current = clamp(tRef.current + 0.007, 0, 1);
+        setTUI(tRef.current);
+        animRef.current?.(tRef.current);
+        if (tRef.current >= 1) { playRef.current=false; setPlaying(false); }
+      }
+      if (autoRef.current) root.rotation.y += 0.004;
+      renderer.render(scene, camera);
+    };
+    tick();
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      el.removeEventListener("pointerdown", dn);
+      el.removeEventListener("pointermove", mv);
+      el.removeEventListener("pointerup",   up);
+      el.removeEventListener("pointerleave",up);
+      renderer.dispose();
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+    };
+  }, []); // eslint-disable-line
+
+  // Rebuild on prop changes
+  useEffect(() => {
+    const st = stRef.current;
+    if (!st) return;
+    clearGroup(st.carton);
+    animRef.current = null;
+
+    const L_ = Math.max(50,L), W_ = Math.max(40,W), H_ = Math.max(30,H);
+    const lH = Math.max(20,lidH), bT = Math.max(1,boardThickness);
+
+    const fn = style === "0300" ? buildTray(L_,W_,H_,bT,st.carton)
+             : style === "0713" ? buildTelescope(L_,W_,H_,lH,bT,st.carton)
+             :                    buildSlotted(L_,W_,H_,style,bT,st.carton);
+
+    let productMat=null,wireMat=null,pMesh=null;
+    const checkCollisions=(productDims)=>{
+      const prodBox=new THREE.Box3(
+        new THREE.Vector3(-(productDims.L/2)*SC, -(productDims.H/2)*SC, -(productDims.W/2)*SC),
+        new THREE.Vector3((productDims.L/2)*SC, (productDims.H/2)*SC, (productDims.W/2)*SC),
+      );
+      let n=0;
+      st.carton.traverse(obj=>{
+        if(!obj?.isMesh||obj===pMesh||obj.userData?.isClearanceWire)return;
+        const m=obj.material;
+        if(!m||Array.isArray(m))return;
+        if(!obj.userData.baseColor)obj.userData.baseColor=m.color?.getHex?.()??0xffffff;
+        const box=new THREE.Box3().setFromObject(obj);
+        const hit=box.intersectsBox(prodBox);
+        if(hit){
+          n++;
+          m.color?.setHex?.(0xFF4444);
+          m.emissive?.setHex?.(0xFF0000);
+          m.emissiveIntensity=0.2;
+        }else{
+          m.color?.setHex?.(obj.userData.baseColor);
+          m.emissive?.setHex?.(0x000000);
+          m.emissiveIntensity=0;
+        }
+      });
+      onCollisionUpdate?.(n);
+    };
+    const clearCollisionTint=()=>{
+      st.carton.traverse(obj=>{
+        if(!obj?.isMesh||obj===pMesh||obj.userData?.isClearanceWire)return;
+        const m=obj.material;if(!m||Array.isArray(m))return;
+        if(obj.userData.baseColor)m.color?.setHex?.(obj.userData.baseColor);
+        m.emissive?.setHex?.(0x000000);m.emissiveIntensity=0;
+      });
+      onCollisionUpdate?.(-1);
+    };
+    if(productGeometry&&productBBox){
+      const geom=productGeometry.clone();
+      geom.computeBoundingBox();
+      const centre=new THREE.Vector3();geom.boundingBox.getCenter(centre);
+      const rawSize=new THREE.Vector3();geom.boundingBox.getSize(rawSize);
+      pMesh=new THREE.Mesh(geom,new THREE.MeshStandardMaterial({
+        color:0x88BBDD,roughness:0.3,metalness:0.05,transparent:true,opacity:0,side:THREE.DoubleSide,
+      }));
+      pMesh.position.set(-centre.x*SC,-centre.y*SC,-centre.z*SC);
+      if(productOrientation==="side")pMesh.rotation.set(Math.PI/2,0,0);
+      else if(productOrientation==="rotated")pMesh.rotation.set(0,Math.PI/2,0);
+      else pMesh.rotation.set(0,0,0);
+      const sx=rawSize.x>0?(productBBox.L*SC)/rawSize.x:1;
+      const sy=rawSize.y>0?(productBBox.H*SC)/rawSize.y:1;
+      const sz=rawSize.z>0?(productBBox.W*SC)/rawSize.z:1;
+      pMesh.scale.set(sx,sy,sz);
+      productMat=pMesh.material;
+      st.carton.add(pMesh);
+      const clearW=(productBBox.L+productClearance.left+productClearance.right)*SC;
+      const clearH=(productBBox.H+productClearance.top+productClearance.bottom)*SC;
+      const clearD=(productBBox.W+productClearance.front+productClearance.back)*SC;
+      const offsetX=((productClearance.right-productClearance.left)/2)*SC;
+      const offsetY=((productClearance.top-productClearance.bottom)/2)*SC;
+      const offsetZ=((productClearance.front-productClearance.back)/2)*SC;
+      const clearWire=new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(clearW,clearH,clearD)),
+        new THREE.LineBasicMaterial({color:0x22CC88,transparent:true,opacity:0})
+      );
+      clearWire.userData.isClearanceWire=true;
+      clearWire.position.set(offsetX,offsetY,offsetZ);
+      wireMat=clearWire.material;
+      st.carton.add(clearWire);
+    }
+
+    animRef.current = (t)=>{
+      fn(t);
+      const op=t<0.4?0:Math.min(0.55,((t-0.4)/0.25)*0.55);
+      if(productMat)productMat.opacity=op;
+      if(wireMat)wireMat.opacity=op;
+      if(productBBox){
+        if(t>0.85)checkCollisions(productBBox);
+        else clearCollisionTint();
+      }
+    };
+    productLayerRef.current={mat:productMat,wireMat};
+    animRef.current(tRef.current);
+    frameCamera(st.camera, L_, W_, H_, style);
+  }, [L, W, H, style, lidH, boardThickness, productGeometry, productBBox, productClearance, productOrientation, onCollisionUpdate]);
+
+  const handlePlay = () => {
+    if (tRef.current >= 1) { tRef.current=0; setTUI(0); animRef.current?.(0); }
+    playRef.current = !playing; setPlaying(!playing);
+  };
+  const scrub = e => {
+    const v = parseFloat(e.target.value)/100;
+    tRef.current=v; setTUI(v); playRef.current=false; setPlaying(false); animRef.current?.(v);
+  };
+  const jump = v => {
+    tRef.current=v; setTUI(v); playRef.current=false; setPlaying(false); animRef.current?.(v);
+  };
+
+  const pct = Math.round(tUI * 100);
+  const PU = "#5B3D9E";
+
+  return (
+    <div style={{ background:"#FDFAF5", borderRadius:10, overflow:"hidden", userSelect:"none" }}>
+      <div ref={mountRef} style={{ width:"100%", height:300, position:"relative" }}>
+        <span style={{ position:"absolute",top:6,left:8,fontSize:9,fontWeight:700,
+          color:"#7A5C20",background:"rgba(255,245,210,.88)",padding:"2px 8px",borderRadius:4,letterSpacing:1 }}>
+          {style}
+        </span>
+        <span style={{ position:"absolute",top:6,right:8,fontSize:8,color:"#9B8060",
+          background:"rgba(255,250,240,.80)",padding:"2px 7px",borderRadius:4,pointerEvents:"none" }}>
+          drag to rotate
+        </span>
+      </div>
+
+      <div style={{ padding:"9px 12px 11px", borderTop:"1px solid #E8E0CE", background:"#FDFAF5" }}>
+        <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:7 }}>
+          <span style={{ fontSize:9,fontFamily:"monospace",color:"#7A6040",minWidth:28,textAlign:"right" }}>
+            {pct<4?"flat":pct>96?"up":`${pct}%`}
+          </span>
+          <div style={{ flex:1,position:"relative",height:18,display:"flex",alignItems:"center" }}>
+            <div style={{ position:"absolute",left:0,right:0,height:3,background:"#E0CFA8",borderRadius:2 }}/>
+            <div style={{ position:"absolute",left:0,width:`${pct}%`,height:3,background:PU,borderRadius:2 }}/>
+            <input type="range" min={0} max={100} value={pct} onChange={scrub} style={{
+              position:"absolute",left:0,right:0,width:"100%",
+              WebkitAppearance:"none",appearance:"none",background:"transparent",cursor:"pointer",height:18,margin:0 }}/>
+          </div>
+        </div>
+
+        <div style={{ display:"flex",gap:5,alignItems:"center" }}>
+          <button onClick={handlePlay} style={{
+            width:30,height:30,borderRadius:7,border:"none",background:PU,
+            color:"white",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12 }}>
+            {playing?"Pause":"Play"}
+          </button>
+          {[["Flat",0],["Half",0.5],["Up",1]].map(([lbl,v])=>(
+            <button key={lbl} onClick={()=>jump(v)} style={{
+              border:`1px solid ${Math.abs(tUI-v)<0.04?PU:"#D0C0A0"}`,
+              background:Math.abs(tUI-v)<0.04?"#EDE9FE":"white",
+              color:Math.abs(tUI-v)<0.04?PU:"#7A6040",
+              padding:"4px 9px",borderRadius:6,fontSize:9,fontWeight:600,cursor:"pointer" }}>
+              {lbl}
+            </button>
+          ))}
+          <span style={{ marginLeft:"auto",fontSize:9,color:"#9B8060",fontFamily:"monospace" }}>
+            {L}x{W}x{H}mm
+          </span>
+        </div>
+      </div>
+
+      <style>{`
+        input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+          background:${PU};cursor:pointer;border:2px solid white;box-shadow:0 1px 5px rgba(91,61,158,.4);}
+        input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;
+          background:${PU};cursor:pointer;border:2px solid white;}
+      `}</style>
+    </div>
+  );
+}
+
+// ─── 3D Product-in-carton viewer ──────────────────────────────────────────────
+const SCALE=0.06;
+function ProductInCarton3D({box,product,fillPattern}){
+  const mountRef=useRef(null);
+  useEffect(()=>{
+    const mount=mountRef.current;if(!mount)return;
+    const width=mount.clientWidth||340,height=240;
+    const renderer=new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(width,height);renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+    mount.appendChild(renderer.domElement);
+    const scene=new THREE.Scene();scene.background=new THREE.Color(0xF9F8F6);
+    const camera=new THREE.PerspectiveCamera(38,width/height,.1,5000);
+    const maxDim=Math.max(box.L,box.W,box.H)*SCALE;
+    camera.position.set(maxDim*1.2,maxDim*1.0,maxDim*3.0);camera.lookAt(0,0,0);
+    scene.add(new THREE.AmbientLight(0xffffff,.82));
+    const d1=new THREE.DirectionalLight(0xffffff,.8);d1.position.set(90,100,80);scene.add(d1);
+    const root=new THREE.Group();root.rotation.x=.28;root.rotation.y=.52;scene.add(root);
+    root.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(box.L*SCALE,box.H*SCALE,box.W*SCALE)),new THREE.LineBasicMaterial({color:0x7C3AED})));
+    const productMat=new THREE.MeshStandardMaterial({color:0x60A5FA,roughness:.45});
+    (fillPattern?.placements?.slice(0,120)||[]).forEach(p=>{
+      const o=p.orientation;if(!o)return;
+      let mesh;
+      if(product.type==="box"){mesh=new THREE.Mesh(new THREE.BoxGeometry(o.L*SCALE,o.H*SCALE,o.W*SCALE),productMat);}
+      else if(o.kind==="cylinder-upright"){mesh=new THREE.Mesh(new THREE.CylinderGeometry(o.diameter*SCALE/2,o.diameter*SCALE/2,o.H*SCALE,20),productMat);}
+      else{mesh=new THREE.Mesh(new THREE.CylinderGeometry((o.diameter||product.diameter)*SCALE/2,(o.diameter||product.diameter)*SCALE/2,(o.length||product.H)*SCALE,20),productMat);mesh.rotation.z=Math.PI/2;}
+      mesh.position.set(p.x*SCALE,p.y*SCALE,p.z*SCALE);root.add(mesh);
+    });
+    let drag=false,autoSpin=true,px=0,py=0;
+    const el=renderer.domElement;
+    el.addEventListener("pointerdown",e=>{drag=true;autoSpin=false;px=e.clientX;py=e.clientY;});
+    el.addEventListener("pointermove",e=>{if(!drag)return;root.rotation.y+=(e.clientX-px)*.012;root.rotation.x=clamp(root.rotation.x+(e.clientY-py)*.008,-1.2,1.2);px=e.clientX;py=e.clientY;});
+    el.addEventListener("pointerup",()=>{drag=false;});
+    let raf=0;const tick=()=>{raf=requestAnimationFrame(tick);if(autoSpin)root.rotation.y+=.0025;renderer.render(scene,camera);};tick();
+    return()=>{cancelAnimationFrame(raf);productMat.dispose();renderer.dispose();if(mount.contains(renderer.domElement))mount.removeChild(renderer.domElement);};
+  },[box,product,fillPattern]);
+  return(<div style={{position:"relative"}}><div ref={mountRef} style={{width:"100%",height:240}}/><div style={{position:"absolute",bottom:6,right:8,fontSize:8,color:T.textLight,background:T.surface+"cc",padding:"2px 6px",borderRadius:5}}>drag to rotate</div></div>);
+}
+
+// ─── 3D Pallet viewer ─────────────────────────────────────────────────────────
+function Pallet3D({box,pallet,palletPattern}){
+  const mountRef=useRef(null);
+  const camRef=useRef(null);
+  const zoomRef=useRef(1);
+
+  const doZoom=(delta)=>{
+    if(!camRef.current)return;
+    const cam=camRef.current;
+    zoomRef.current=clamp(zoomRef.current+delta,0.3,3.5);
+    const base=Math.max(pallet.L,pallet.W,pallet.maxH)*0.018;
+    const d=base*2.8/zoomRef.current;
+    cam.position.set(d*0.55,d*0.42,d);
+    cam.lookAt(0,0,0);
+  };
+
+  useEffect(()=>{
+    const mount=mountRef.current;if(!mount)return;
+    const PS=0.015;
+    const W3=mount.clientWidth||460,H3=340;
+    const renderer=new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(W3,H3);renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+    renderer.shadowMap.enabled=true;
+    mount.appendChild(renderer.domElement);
+    const scene=new THREE.Scene();scene.background=new THREE.Color(0xF2F0EC);
+
+    const camera=new THREE.PerspectiveCamera(36,W3/H3,.1,8000);
+    camRef.current=camera;
+    const base=Math.max(pallet.L,pallet.W,pallet.maxH)*PS;
+    camera.position.set(base*0.55*2.8,base*0.42*2.8,base*2.8);
+    camera.lookAt(0,0,0);
+
+    scene.add(new THREE.AmbientLight(0xffffff,.65));
+    const sun=new THREE.DirectionalLight(0xfff8e8,1.1);
+    sun.position.set(200,350,200);sun.castShadow=true;
+    sun.shadow.mapSize.set(1024,1024);
+    sun.shadow.camera.left=-800*PS;sun.shadow.camera.right=800*PS;
+    sun.shadow.camera.top=800*PS;sun.shadow.camera.bottom=-800*PS;
+    scene.add(sun);
+    const fill=new THREE.DirectionalLight(0xd0e8ff,.35);fill.position.set(-150,80,-200);scene.add(fill);
+
+    const root=new THREE.Group();root.rotation.x=.18;root.rotation.y=.42;scene.add(root);
+
+    // ── Pallet deck ──────────────────────────────────────────────────────────
+    const palH=144*PS;
+    const palW=pallet.L*PS,palD=pallet.W*PS;
+    // Deck boards (top surface slats)
+    const deckMat=new THREE.MeshStandardMaterial({color:0xC4944A,roughness:.9});
+    const legMat =new THREE.MeshStandardMaterial({color:0xB07840,roughness:.95});
+    const deckY=-pallet.maxH*PS/2+palH*0.72;
+    // 3 top slat blocks
+    [[0,0],[-.32,0],[.32,0]].forEach(([ox,oz])=>{
+      const s=new THREE.Mesh(new THREE.BoxGeometry(palW,palH*0.22,palD*.28),deckMat);
+      s.position.set(ox*palW,deckY,oz*palD);s.receiveShadow=true;root.add(s);
+    });
+    // Full top deck plank
+    const deck=new THREE.Mesh(new THREE.BoxGeometry(palW,palH*0.15,palD),deckMat);
+    deck.position.y=deckY+palH*0.18;deck.receiveShadow=true;root.add(deck);
+    // 3 pallet legs
+    [-.4,0,.4].forEach(ox=>{
+      const leg=new THREE.Mesh(new THREE.BoxGeometry(palW*.28,palH*.55,palD),legMat);
+      leg.position.set(ox*palW,-pallet.maxH*PS/2+palH*.27,0);leg.receiveShadow=true;root.add(leg);
+    });
+    // Bottom boards
+    [-.4,0,.4].forEach(oz=>{
+      const b=new THREE.Mesh(new THREE.BoxGeometry(palW,palH*.12,palD*.2),deckMat);
+      b.position.set(0,-pallet.maxH*PS/2+palH*.06,oz*palD);b.receiveShadow=true;root.add(b);
+    });
+
+    // Collect all materials for cleanup
+    const allMats=[deckMat,legMat];
+
+    // ── Cartons ──────────────────────────────────────────────────────────────
+    if(palletPattern&&box.L>0&&box.W>0&&box.H>0){
+      const cH=box.H*PS;
+      const maxLayers=Math.max(1,palletPattern.maxLayers||1);
+      const layerTemplates=palletPattern.layerTemplates||[{placements:[]}];
+      const baseY=deckY+palH*0.18+palH*0.075+cH/2;
+      const forceAmber=palletPattern.strategy==="column";
+
+      // Two colour sets: normal orientation (warm amber), rotated (cooler tan)
+      // So you can visually distinguish orientations in interlocked/pinwheel
+      const matNormal=new THREE.MeshStandardMaterial({color:0xD4A843,roughness:.80});
+      const matRotated=new THREE.MeshStandardMaterial({color:0x8BAEC4,roughness:.80});
+      allMats.push(matNormal,matRotated);
+      const edgeMat=new THREE.LineBasicMaterial({color:0x6A5820,linewidth:1});
+
+      for(let k=0;k<Math.min(maxLayers,10);k++){
+        const tmpl=layerTemplates[k%layerTemplates.length];
+        (tmpl.placements||[]).forEach(p=>{
+          const cL=(p.rotated?box.W:box.L)*PS;
+          const cW=(p.rotated?box.L:box.W)*PS;
+          const cx=p.x*PS, cz=p.z*PS, cy=baseY+k*cH;
+          // Guard: skip if box centre is more than half its footprint outside pallet
+          if(Math.abs(cx)>palW/2+cL*.1||Math.abs(cz)>palD/2+cW*.1)return;
+          const mat=forceAmber?matNormal:(p.rotated?matRotated:matNormal);
+          const geo=new THREE.BoxGeometry(cL*.97,cH*.97,cW*.97);
+          const mesh=new THREE.Mesh(geo,mat);
+          mesh.position.set(cx,cy,cz);mesh.castShadow=true;mesh.receiveShadow=true;root.add(mesh);
+          const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geo),edgeMat);
+          edges.position.set(cx,cy,cz);root.add(edges);
+        });
+      }
+    }
+
+    // Pallet footprint outline on ground
+    const outlineGeo=new THREE.EdgesGeometry(new THREE.BoxGeometry(palW,0.002,palD));
+    const outline=new THREE.LineSegments(outlineGeo,new THREE.LineBasicMaterial({color:0xBBAA88,linewidth:1}));
+    outline.position.y=-pallet.maxH*PS/2;root.add(outline);
+
+    let drag=false,autoSpin=true,px=0,py=0;
+    const el=renderer.domElement;
+    el.addEventListener("pointerdown",e=>{drag=true;autoSpin=false;px=e.clientX;py=e.clientY;});
+    el.addEventListener("pointermove",e=>{if(!drag)return;root.rotation.y+=(e.clientX-px)*.012;root.rotation.x=clamp(root.rotation.x+(e.clientY-py)*.008,-1.2,1.2);px=e.clientX;py=e.clientY;});
+    el.addEventListener("pointerup",()=>{drag=false;});
+    el.addEventListener("wheel",e=>{e.preventDefault();doZoom(e.deltaY>0?-0.12:0.12);},{passive:false});
+
+    let raf=0;const tick=()=>{raf=requestAnimationFrame(tick);if(autoSpin)root.rotation.y+=.003;renderer.render(scene,camera);};tick();
+    return()=>{
+      cancelAnimationFrame(raf);
+      allMats.forEach(m=>m&&m.dispose&&m.dispose());
+      renderer.dispose();
+      if(mount.contains(renderer.domElement))mount.removeChild(renderer.domElement);
+    };
+  },[box,pallet,palletPattern]);
+
+  return(
+    <div style={{position:"relative"}}>
+      <div ref={mountRef} style={{width:"100%",height:340}}/>
+      {patternHasMixedOrientations(palletPattern)&&(
+        <div style={{position:"absolute",top:6,left:8,fontSize:8,color:T.textMid,background:"rgba(255,252,248,.90)",padding:"5px 7px",borderRadius:6,border:`1px solid ${T.border}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
+            <span style={{width:10,height:10,display:"inline-block",background:"#D4A843",borderRadius:2,border:"1px solid #9A7A2F"}}/>
+            <span>Normal (L along pallet length)</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:5}}>
+            <span style={{width:10,height:10,display:"inline-block",background:"#8BAEC4",borderRadius:2,border:"1px solid #6F8EA1"}}/>
+            <span>Rotated 90° (W along pallet length)</span>
+          </div>
+        </div>
+      )}
+      {/* Zoom controls */}
+      <div style={{position:"absolute",bottom:8,right:8,display:"flex",flexDirection:"column",gap:4}}>
+        {[["+","zoom in",0.25],["-","zoom out",-0.25]].map(([lbl,title,d])=>(
+          <button key={lbl} title={title} onClick={()=>doZoom(d)} style={{
+            width:28,height:28,borderRadius:6,border:"1px solid #D0C8B8",
+            background:"rgba(255,252,248,.92)",color:"#5A4820",fontSize:16,fontWeight:700,
+            cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+      <div style={{position:"absolute",top:6,right:8,fontSize:8,color:"#9B8060",background:"rgba(255,250,240,.80)",padding:"2px 7px",borderRadius:4,pointerEvents:"none"}}>
+        drag | scroll to zoom
+      </div>
+    </div>
+  );
+}
+// ─── Die-cut flat view ────────────────────────────────────────────────────────
+function DieCutSlotted({L,W,H,style,selected,onSelect,onPanelCentroids,featurePaths=[],eligiblePanelIds=[],productBBox=null,productClearance=null}){
+  const lay=useMemo(()=>{
+    const VW=340,VH=220,PAD=28;
+    const flapCfg=FEFCO[style]?.flaps?.(W)||FEFCO["0201"].flaps(W);
+    const geo=calcSlotted(L,W,H,flapCfg);
+    const{topH,btmH,tMj,tMn,bMj,bMn,blankW,blankH,xs}=geo;
+    const sc=Math.min((VW-2*PAD)/blankW,(VH-2*PAD)/blankH);
+    const sw=blankW*sc,sh=blankH*sc;
+    const ox=(VW-sw)/2,oy=(VH-sh)/2;
+    const[x0s,x1s,x2s,x3s,x4s,x5s]=xs.map(x=>x*sc);
+    const y0s=0,y1s=btmH*sc,y2s=(btmH+H)*sc,y3s=sh;
+    const hitPanels=[
+      {id:"glue",x:x0s,y:y1s,w:x1s,h:y2s-y1s,ctrl:"W"},
+      {id:"bW1",x:x1s,y:y1s,w:x2s-x1s,h:y2s-y1s,ctrl:"W"},
+      {id:"bL1",x:x2s,y:y1s,w:x3s-x2s,h:y2s-y1s,ctrl:"L"},
+      {id:"bW2",x:x3s,y:y1s,w:x4s-x3s,h:y2s-y1s,ctrl:"W"},
+      {id:"bL2",x:x4s,y:y1s,w:x5s-x4s,h:y2s-y1s,ctrl:"L"},
+      ...(btmH>0?[{id:"bfW1",x:x1s,y:y1s-bMn*sc,w:x2s-x1s,h:bMn*sc,ctrl:"W"},{id:"bfL1",x:x2s,y:y1s-bMj*sc,w:x3s-x2s,h:bMj*sc,ctrl:"W"},{id:"bfW2",x:x3s,y:y1s-bMn*sc,w:x4s-x3s,h:bMn*sc,ctrl:"W"},{id:"bfL2",x:x4s,y:y1s-bMj*sc,w:x5s-x4s,h:bMj*sc,ctrl:"W"}]:[]),
+      ...(topH>0?[{id:"tfW1",x:x1s,y:y2s,w:x2s-x1s,h:tMn*sc,ctrl:"W"},{id:"tfL1",x:x2s,y:y2s,w:x3s-x2s,h:tMj*sc,ctrl:"W"},{id:"tfW2",x:x3s,y:y2s,w:x4s-x3s,h:tMn*sc,ctrl:"W"},{id:"tfL2",x:x4s,y:y2s,w:x5s-x4s,h:tMj*sc,ctrl:"W"}]:[]),
+    ];
+    const centroids=hitPanels.map(p=>({id:p.id,cx:(ox+p.x+p.w/2)/VW,cy:(oy+p.y+p.h/2)/VH}));
+    return{VW,VH,sc,sw,sh,ox,oy,x0s,x1s,x2s,x3s,x4s,x5s,y0s,y1s,y2s,y3s,hitPanels,centroids,CW:1.4,CSW:1.0,topH,btmH,tMj,tMn,bMj,bMn};
+  },[L,W,H,style]);
+
+  useLayoutEffect(()=>{onPanelCentroids?.(lay.centroids);},[lay.centroids,onPanelCentroids]);
+
+  const{VW,VH,sc,sw,sh,ox,oy,x0s,x1s,x2s,x3s,x4s,x5s,y0s,y1s,y2s,y3s,hitPanels,CW,CSW,topH,btmH,tMj,tMn,bMj,bMn}=lay;
+  const prodOverlay=useMemo(()=>{
+    if(!productBBox||!productClearance)return null;
+    const panelCentreX=(x1s+x2s)/2,panelCentreY=(y1s+y2s)/2;
+    const prodSVGW=productBBox.L*sc,prodSVGH=productBBox.H*sc;
+    const prodX=panelCentreX-prodSVGW/2,prodY=panelCentreY-prodSVGH/2;
+    const clearSVGW=(productBBox.L+productClearance.left+productClearance.right)*sc;
+    const clearSVGH=(productBBox.H+productClearance.top+productClearance.bottom)*sc;
+    const clearX=panelCentreX-clearSVGW/2,clearY=panelCentreY-clearSVGH/2;
+    return{prodX,prodY,prodSVGW,prodSVGH,panelCentreX,panelCentreY,clearX,clearY,clearSVGW,clearSVGH};
+  },[productBBox,productClearance,sc,x1s,x2s,y1s,y2s]);
+  return(
+    <svg viewBox={`0 0 ${VW} ${VH}`} style={{width:"100%",display:"block"}} onClick={e=>{if(e.target===e.currentTarget)onSelect(null);}}>
+      <rect width={VW} height={VH} fill="#F0EEE9"/><rect x={ox} y={oy} width={sw} height={sh} fill="white"/>
+      <g transform={`translate(${ox},${oy})`}>
+        {hitPanels.map(p=>{if(selected!==p.id)return null;const c={W:T.green,L:T.purple,H:T.blue}[p.ctrl]||T.purple;return<rect key={p.id} x={p.x} y={p.y} width={p.w} height={p.h} fill={c+"33"} stroke={c} strokeWidth={1.5} style={{pointerEvents:"none"}}/>;  })}
+        {eligiblePanelIds.map(id=>{
+          const p=hitPanels.find(v=>v.id===id);
+          if(!p)return null;
+          return <rect key={`el-${id}`} x={p.x} y={p.y} width={Math.max(p.w,1)} height={Math.max(p.h,1)} fill="none" stroke={T.purple} strokeWidth={0.8} strokeDasharray="3 2" opacity={0.6}/>;
+        })}
+        {[x2s,x3s,x4s].map((x,i)=><line key={i} x1={x} y1={y1s} x2={x} y2={y2s} stroke={AC.CREASE} strokeWidth={CSW} strokeDasharray="4 3"/>)}
+        {btmH>0&&<line x1={x1s} y1={y1s} x2={x5s} y2={y1s} stroke={AC.CREASE} strokeWidth={CSW} strokeDasharray="4 3"/>}
+        {topH>0&&<line x1={x1s} y1={y2s} x2={x5s} y2={y2s} stroke={AC.CREASE} strokeWidth={CSW} strokeDasharray="4 3"/>}
+        <rect x={0} y={0} width={sw} height={sh} fill="none" stroke={AC.CUT} strokeWidth={CW}/>
+        <line x1={x1s} y1={y1s} x2={x1s} y2={y2s} stroke={AC.CUT} strokeWidth={CW}/>
+        {btmH>0&&[x1s,x2s,x3s,x4s].map((x,i)=><line key={i} x1={x} y1={y0s} x2={x} y2={y1s} stroke={AC.CUT} strokeWidth={CW}/>)}
+        {topH>0&&[x1s,x2s,x3s,x4s].map((x,i)=><line key={i} x1={x} y1={y2s} x2={x} y2={y3s} stroke={AC.CUT} strokeWidth={CW}/>)}
+        {btmH>0&&bMn<btmH&&<><line x1={x1s} y1={y1s-bMn*sc} x2={x2s} y2={y1s-bMn*sc} stroke={AC.CUT} strokeWidth={CW}/><line x1={x3s} y1={y1s-bMn*sc} x2={x4s} y2={y1s-bMn*sc} stroke={AC.CUT} strokeWidth={CW}/></>}
+        {topH>0&&tMn<topH&&<><line x1={x1s} y1={y2s+tMn*sc} x2={x2s} y2={y2s+tMn*sc} stroke={AC.CUT} strokeWidth={CW}/><line x1={x3s} y1={y2s+tMn*sc} x2={x4s} y2={y2s+tMn*sc} stroke={AC.CUT} strokeWidth={CW}/></>}
+        {prodOverlay&&<>
+          <rect x={prodOverlay.prodX} y={prodOverlay.prodY} width={prodOverlay.prodSVGW} height={prodOverlay.prodSVGH} fill="rgba(136,187,221,0.15)" stroke="#88BBDD" strokeWidth={0.8} strokeDasharray="3 2"/>
+          <rect x={prodOverlay.clearX} y={prodOverlay.clearY} width={prodOverlay.clearSVGW} height={prodOverlay.clearSVGH} fill="none" stroke="rgba(136,187,221,0.6)" strokeWidth={0.8} strokeDasharray="2 2"/>
+          <text x={prodOverlay.panelCentreX} y={prodOverlay.panelCentreY} textAnchor="middle" dominantBaseline="middle" fill="#88BBDD" fontSize={7} fontFamily="monospace">product</text>
+        </>}
+        {featurePaths.map(f=>{
+          const stroke=f.kind==="crease"?AC.CREASE:AC.CUT;
+          const dash=f.kind==="crease"?"2 2":"none";
+          const d=(f.svgPath||"").replace(/-?\d+(\.\d+)?/g,n=>String(Number(n)*sc));
+          return <path key={f.id} d={d} fill="none" stroke={stroke} strokeDasharray={dash} strokeWidth={f.preview?1.1:1.3} opacity={f.preview?0.75:1}/>;
+        })}
+        {[[x0s,x1s,"gl","",T.textLight],[x1s,x2s,"W",`${W}`,T.green],[x2s,x3s,"L",`${L}`,T.purple],[x3s,x4s,"W",`${W}`,T.green],[x4s,x5s,"L",`${L}`,T.purple]].map(([xa,xb,lbl,sub,c],i)=>{
+          const tx=(xa+xb)/2,ty=(y1s+y2s)/2,fs=Math.min((x3s-x2s)*.2,9);
+          if(xb-xa<12)return null;
+          return(<g key={i}><text x={tx} y={ty-(sub?4:0)} textAnchor="middle" dominantBaseline="middle" fill={c} fontSize={fs} fontFamily="monospace">{lbl}</text>{sub&&<text x={tx} y={ty+6} textAnchor="middle" dominantBaseline="middle" fill={c} fontSize={Math.min(fs-1,8)} fontFamily="monospace" opacity={.8}>{sub}mm</text>}</g>);
+        })}
+        {hitPanels.map(p=><rect key={`h-${p.id}`} x={p.x} y={p.y} width={Math.max(p.w,1)} height={Math.max(p.h,1)} fill="transparent" style={{cursor:"pointer"}} onClick={e=>{e.stopPropagation();onSelect(selected===p.id?null:p.id);}}/>)}
+      </g>
+      {[[x1s,x2s,"W",T.green],[x2s,x3s,"L",T.purple],[x3s,x4s,"W",T.green],[x4s,x5s,"L",T.purple]].map(([xa,xb,lbl,c],i)=>(<text key={i} x={ox+(xa+xb)/2} y={oy+y3s+12} textAnchor="middle" fill={c} fontSize={7} fontFamily="monospace">{lbl}</text>))}
+      <text x={ox+x5s+12} y={oy+(y1s+y2s)/2} textAnchor="middle" dominantBaseline="middle" fill="#555" fontSize={7} fontFamily="monospace">H</text>
+      {prodOverlay&&(
+        <g>
+          <rect x={ox+2} y={VH-16} width={8} height={5} fill="none" stroke="#88BBDD" strokeWidth={0.8} strokeDasharray="3 2"/>
+          <text x={ox+13} y={VH-12} fill="#88BBDD" fontSize={7} fontFamily="monospace">product footprint</text>
+          <rect x={ox+88} y={VH-16} width={8} height={5} fill="none" stroke="rgba(136,187,221,0.6)" strokeWidth={0.8} strokeDasharray="2 2"/>
+          <text x={ox+99} y={VH-12} fill="#88BBDD" fontSize={7} fontFamily="monospace">product + clearance</text>
+        </g>
+      )}
+    </svg>
+  );
+}
+
+function DieCutTray({L,W,H,selected,onSelect,onPanelCentroids}){
+  const lay=useMemo(()=>{
+    const VW=340,VH=220,PAD=28;
+    const sc=Math.min((VW-2*PAD)/(L+2*H),(VH-2*PAD)/(W+2*H));
+    const Hs=H*sc,Ls=L*sc,Ws=W*sc;
+    const ox=(VW-(Ls+2*Hs))/2,oy=(VH-(Ws+2*Hs))/2;
+    const x0=0,x1=Hs,x2=Hs+Ls,x3=Hs+Ls+Hs;
+    const y0=0,y1=Hs,y2=Hs+Ws,y3=Hs+Ws+Hs;
+    const panels=[{id:"base",x:x1,y:y1,w:Ls,h:Ws,ctrl:"L",lbl:"BASE"},{id:"front",x:x1,y:y0,w:Ls,h:Hs,ctrl:"H",lbl:"FRONT"},{id:"back",x:x1,y:y2,w:Ls,h:Hs,ctrl:"H",lbl:"BACK"},{id:"left",x:x0,y:y1,w:Hs,h:Ws,ctrl:"W",lbl:"SIDE"},{id:"right",x:x2,y:y1,w:Hs,h:Ws,ctrl:"W",lbl:"SIDE"}];
+    const centroids=panels.map(p=>({id:p.id,cx:(ox+p.x+p.w/2)/VW,cy:(oy+p.y+p.h/2)/VH}));
+    return{VW,VH,ox,oy,panels,Ls,Hs,Ws,x1,x2,y0,y1,y2,y3,x0,x3,centroids};
+  },[L,W,H]);
+
+  useLayoutEffect(()=>{onPanelCentroids?.(lay.centroids);},[lay.centroids,onPanelCentroids]);
+
+  const{VW,VH,ox,oy,panels,Ls,Hs,Ws,x1,x2,y0,y1,y2,y3,x0,x3}=lay;
+  return(
+    <svg viewBox={`0 0 ${VW} ${VH}`} style={{width:"100%",display:"block"}} onClick={e=>{if(e.target===e.currentTarget)onSelect(null);}}>
+      <rect width={VW} height={VH} fill="#F0EEE9"/>
+      <g transform={`translate(${ox},${oy})`}>
+        {panels.map(p=>{if(selected!==p.id)return null;const c={W:T.green,L:T.purple,H:T.blue}[p.ctrl]||T.purple;return<rect key={p.id} x={p.x} y={p.y} width={p.w} height={p.h} fill={c+"33"} stroke={c} strokeWidth={1.5} style={{pointerEvents:"none"}}/>;  })}
+        <rect x={x1} y={y0} width={Ls} height={Hs} fill="white"/>
+        <rect x={x0} y={y1} width={x3} height={Ws} fill="white"/>
+        <rect x={x1} y={y2} width={Ls} height={Hs} fill="white"/>
+        <line x1={x1} y1={y1} x2={x2} y2={y1} stroke={AC.CREASE} strokeWidth={1} strokeDasharray="4 3"/>
+        <line x1={x1} y1={y2} x2={x2} y2={y2} stroke={AC.CREASE} strokeWidth={1} strokeDasharray="4 3"/>
+        <line x1={x1} y1={y1} x2={x1} y2={y2} stroke={AC.CREASE} strokeWidth={1} strokeDasharray="4 3"/>
+        <line x1={x2} y1={y1} x2={x2} y2={y2} stroke={AC.CREASE} strokeWidth={1} strokeDasharray="4 3"/>
+        <polyline points={`${x1},${y0} ${x2},${y0} ${x2},${y1} ${x3},${y1} ${x3},${y2} ${x2},${y2} ${x2},${y3} ${x1},${y3} ${x1},${y2} ${x0},${y2} ${x0},${y1} ${x1},${y1} ${x1},${y0}`} fill="none" stroke={AC.CUT} strokeWidth={1.4}/>
+        {panels.map(p=>(p.w>14&&p.h>10&&<text key={p.id} x={p.x+p.w/2} y={p.y+p.h/2} textAnchor="middle" dominantBaseline="middle" fill={T.textMid} fontSize={Math.min(p.w*.18,9)} fontFamily="monospace">{p.lbl}</text>))}
+        {panels.map(p=><rect key={`h-${p.id}`} x={p.x} y={p.y} width={p.w} height={p.h} fill="transparent" style={{cursor:"pointer"}} onClick={e=>{e.stopPropagation();onSelect(selected===p.id?null:p.id);}}/>)}
+      </g>
+    </svg>
+  );
+}
+
+// ─── Panel info ───────────────────────────────────────────────────────────────
+function PanelInfo({id,L,W,H,style}){
+  if(!id)return(<div style={{padding:"8px 14px",background:T.surface,border:`1px dashed ${T.border}`,borderRadius:8,textAlign:"center",fontSize:10,color:T.textLight}}>Tap any panel to inspect</div>);
+  const flapCfg=FEFCO[style]?.flaps?.(W)||{bMj:0,bMn:0,tMj:0,tMn:0};
+  const g=glueTW(W);
+  const{bMj=0,bMn=0,tMj=0,tMn=0}=flapCfg;
+  const map={
+    glue:{name:"Glue Tab",dim:`${g} x ${H} mm`,ctrl:"W"},bW1:{name:"Width Panel",dim:`${W} x ${H} mm`,ctrl:"W"},bL1:{name:"Length Panel",dim:`${L} x ${H} mm`,ctrl:"L"},
+    bW2:{name:"Width Panel",dim:`${W} x ${H} mm`,ctrl:"W"},bL2:{name:"Length Panel",dim:`${L} x ${H} mm`,ctrl:"L"},
+    bfW1:{name:"Btm Minor Flap",dim:`${W} x ${bMn} mm`,ctrl:"W"},bfL1:{name:"Btm Major Flap",dim:`${L} x ${bMj} mm`,ctrl:"W"},
+    bfW2:{name:"Btm Minor Flap",dim:`${W} x ${bMn} mm`,ctrl:"W"},bfL2:{name:"Btm Major Flap",dim:`${L} x ${bMj} mm`,ctrl:"W"},
+    tfW1:{name:"Top Minor Flap",dim:`${W} x ${tMn} mm`,ctrl:"W"},tfL1:{name:"Top Major Flap",dim:`${L} x ${tMj} mm`,ctrl:"W"},
+    tfW2:{name:"Top Minor Flap",dim:`${W} x ${tMn} mm`,ctrl:"W"},tfL2:{name:"Top Major Flap",dim:`${L} x ${tMj} mm`,ctrl:"W"},
+    base:{name:"Base",dim:`${L} x ${W} mm`,ctrl:"L"},front:{name:"Front",dim:`${L} x ${H} mm`,ctrl:"H"},
+    back:{name:"Back",dim:`${L} x ${H} mm`,ctrl:"H"},left:{name:"Side",dim:`${W} x ${H} mm`,ctrl:"W"},right:{name:"Side",dim:`${W} x ${H} mm`,ctrl:"W"},
+  };
+  const info=map[id]||{name:id,dim:"",ctrl:"L"};
+  const c={W:T.green,L:T.purple,H:T.blue}[info.ctrl]||T.purple;
+  return(<div style={{padding:"8px 14px",background:T.surface,borderLeft:`3px solid ${c}`,border:`1px solid ${c}22`,borderRadius:8,fontFamily:"monospace"}}>
+    <div style={{fontSize:8,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>{info.name}</div>
+    <div style={{fontSize:14,color:c,marginTop:2,fontWeight:"bold"}}>{info.dim}</div>
+  </div>);
+}
+
+// ─── Panel editor (flat dieline) ─────────────────────────────────────────────
+function bestWForGlueTarget(targetG,Wmax=800){
+  const t=Math.round(Number(targetG));
+  if(!Number.isFinite(t)||t<28)return null;
+  let best=50,bd=1e9;
+  for(let W=50;W<=Wmax;W++){
+    const d=Math.abs(glueTW(W)-t);
+    if(d<bd){bd=d;best=W;}
+  }
+  return best;
+}
+
+function getSlottedPanelEditorMeta(id,style,L,W,H){
+  const flapCfg=FEFCO[style]?.flaps?.(W)||FEFCO["0201"].flaps(W);
+  const g=glueTW(W);
+  const{bMj=0,bMn=0,tMj=0,tMn=0}=flapCfg;
+  const rows={
+    glue:{name:"Glue tab",type:"glue",wMm:g,hMm:H,editKey:"glue",inputValue:g,driverLabel:"Glue width (from board width W)",driverShort:"Glue"},
+    bW1:{name:"Width panel (face)",type:"body",wMm:W,hMm:H,editKey:"W",inputValue:W,driverLabel:"W — board width",driverShort:"W"},
+    bL1:{name:"Length panel (face)",type:"body",wMm:L,hMm:H,editKey:"L",inputValue:L,driverLabel:"L — board length",driverShort:"L"},
+    bW2:{name:"Width panel (face)",type:"body",wMm:W,hMm:H,editKey:"W",inputValue:W,driverLabel:"W — board width",driverShort:"W"},
+    bL2:{name:"Length panel (face)",type:"body",wMm:L,hMm:H,editKey:"L",inputValue:L,driverLabel:"L — board length",driverShort:"L"},
+    bfW1:{name:"Bottom minor flap",type:"minor",wMm:W,hMm:bMn,editKey:"W",inputValue:W,driverLabel:"W — flap span follows board width",driverShort:"W"},
+    bfL1:{name:"Bottom major flap",type:"major",wMm:L,hMm:bMj,editKey:"L",inputValue:L,driverLabel:"L — major flap span follows board length",driverShort:"L"},
+    bfW2:{name:"Bottom minor flap",type:"minor",wMm:W,hMm:bMn,editKey:"W",inputValue:W,driverLabel:"W — board width",driverShort:"W"},
+    bfL2:{name:"Bottom major flap",type:"major",wMm:L,hMm:bMj,editKey:"L",inputValue:L,driverLabel:"L — board length",driverShort:"L"},
+    tfW1:{name:"Top minor flap",type:"minor",wMm:W,hMm:tMn,editKey:"W",inputValue:W,driverLabel:"W — board width",driverShort:"W"},
+    tfL1:{name:"Top major flap",type:"major",wMm:L,hMm:tMj,editKey:"L",inputValue:L,driverLabel:"L — board length",driverShort:"L"},
+    tfW2:{name:"Top minor flap",type:"minor",wMm:W,hMm:tMn,editKey:"W",inputValue:W,driverLabel:"W — board width",driverShort:"W"},
+    tfL2:{name:"Top major flap",type:"major",wMm:L,hMm:tMj,editKey:"L",inputValue:L,driverLabel:"L — board length",driverShort:"L"},
+  };
+  return rows[id]||null;
+}
+
+function getTrayPanelEditorMeta(id,L,W,H){
+  const rows={
+    base:{name:"Tray base",type:"body",wMm:L,hMm:W,editKey:"L",inputValue:L,driverLabel:"L — base length (also set W for base width via sidebar)",driverShort:"L"},
+    front:{name:"Tray front wall",type:"body",wMm:L,hMm:H,editKey:"H",inputValue:H,driverLabel:"H — wall height",driverShort:"H"},
+    back:{name:"Tray back wall",type:"body",wMm:L,hMm:H,editKey:"H",inputValue:H,driverLabel:"H — wall height",driverShort:"H"},
+    left:{name:"Tray side wall",type:"body",wMm:W,hMm:H,editKey:"W",inputValue:W,driverLabel:"W — tray width",driverShort:"W"},
+    right:{name:"Tray side wall",type:"body",wMm:W,hMm:H,editKey:"W",inputValue:W,driverLabel:"W — tray width",driverShort:"W"},
+  };
+  return rows[id]||null;
+}
+
+function getPanelEditorMeta(id,style,L,W,H){
+  if(!id)return null;
+  if(style==="0300")return getTrayPanelEditorMeta(id,L,W,H);
+  return getSlottedPanelEditorMeta(id,style,L,W,H);
+}
+
+function getSlottedPanelDefs(L,W,H,style){
+  const flapCfg=FEFCO[style]?.flaps?.(W)||FEFCO["0201"].flaps(W);
+  const geo=calcSlotted(L,W,H,flapCfg);
+  const{topH,btmH,tMj,tMn,bMj,bMn,xs}=geo;
+  const[x0,x1,x2,x3,x4,x5]=xs;
+  const y1=btmH,y2=btmH+H;
+  const defs=[
+    {id:"glue",x:x0,y:y1,w:x1-x0,h:y2-y1},
+    {id:"bW1",x:x1,y:y1,w:x2-x1,h:y2-y1},
+    {id:"bL1",x:x2,y:y1,w:x3-x2,h:y2-y1},
+    {id:"bW2",x:x3,y:y1,w:x4-x3,h:y2-y1},
+    {id:"bL2",x:x4,y:y1,w:x5-x4,h:y2-y1},
+  ];
+  if(btmH>0)defs.push(
+    {id:"bfW1",x:x1,y:y1-bMn,w:x2-x1,h:bMn},{id:"bfL1",x:x2,y:y1-bMj,w:x3-x2,h:bMj},
+    {id:"bfW2",x:x3,y:y1-bMn,w:x4-x3,h:bMn},{id:"bfL2",x:x4,y:y1-bMj,w:x5-x4,h:bMj},
+  );
+  if(topH>0)defs.push(
+    {id:"tfW1",x:x1,y:y2,w:x2-x1,h:tMn},{id:"tfL1",x:x2,y:y2,w:x3-x2,h:tMj},
+    {id:"tfW2",x:x3,y:y2,w:x4-x3,h:tMn},{id:"tfL2",x:x4,y:y2,w:x5-x4,h:tMj},
+  );
+  return defs;
+}
+
+const FEATURE_LIBRARY=[
+  {id:"lock_tab",name:"Lock Tab",category:"Closures",implemented:true},
+  {id:"lock_slot",name:"Lock Slot",category:"Closures",implemented:false},
+  {id:"tuck_ext",name:"Tuck Flap Extension",category:"Closures",implemented:false},
+  {id:"thumb_cut",name:"Thumb Cut",category:"Openings",implemented:true},
+  {id:"tear_perf",name:"Tear Perforation",category:"Openings",implemented:true},
+  {id:"zipper_tear",name:"Zipper Tear Strip",category:"Openings",implemented:false},
+  {id:"euro_hang",name:"Euro Hang Hole",category:"Hanging",implemented:true},
+  {id:"round_hang",name:"Round Hang Hole",category:"Hanging",implemented:false},
+  {id:"butterfly_slot",name:"Butterfly Slot",category:"Hanging",implemented:false},
+  {id:"window_cut",name:"Window Cut",category:"Display",implemented:true},
+  {id:"display_lip",name:"Display Lip",category:"Display",implemented:false},
+  {id:"vent_holes",name:"Vent Holes",category:"Ventilation",implemented:false},
+];
+
+const approxArc=(cx,cy,r,a0,a1,steps=10)=>Array.from({length:steps},(_,i)=>{const t0=i/steps,t1=(i+1)/steps,p0=a0+(a1-a0)*t0,p1=a0+(a1-a0)*t1;return[cx+r*Math.cos(p0),cy+r*Math.sin(p0),cx+r*Math.cos(p1),cy+r*Math.sin(p1)];});
+const approxCircle=(cx,cy,r,steps=16)=>approxArc(cx,cy,r,0,Math.PI*2,steps);
+
+function buildFeatureGeometry(featureType,panel,opts){
+  const top=clamp(Number(opts.top)||15,2,Math.max(2,panel.h-2));
+  const xPct=clamp(Number(opts.xPct)||50,0,100);
+  const cx=panel.x+panel.w*(xPct/100),yTop=panel.y+top;
+  if(featureType==="euro_hang"){
+    const slotW=clamp(Number(opts.slotW)||32,8,Math.max(8,panel.w-6));
+    const slotH=clamp(Number(opts.slotH)||7,3,Math.max(3,panel.h-6));
+    const r=slotH/2,x0=cx-slotW/2,x1=cx+slotW/2,y0=yTop-slotH/2,y1=yTop+slotH/2;
+    const holeR=clamp(Number(opts.holeR)||3,2,8),holeCy=y0-(holeR+2);
+    return{
+      path:`M ${x0+r} ${y0} L ${x1-r} ${y0} A ${r} ${r} 0 0 1 ${x1-r} ${y1} L ${x0+r} ${y1} A ${r} ${r} 0 0 1 ${x0+r} ${y0} Z M ${cx+holeR} ${holeCy} A ${holeR} ${holeR} 0 1 0 ${cx-holeR} ${holeCy} A ${holeR} ${holeR} 0 1 0 ${cx+holeR} ${holeCy} Z`,
+      kind:"cut",
+      cuts:[...approxArc(x1-r,(y0+y1)/2,r,-Math.PI/2,Math.PI/2,8),[x1-r,y1,x0+r,y1],...approxArc(x0+r,(y0+y1)/2,r,Math.PI/2,Math.PI*1.5,8),[x0+r,y0,x1-r,y0],...approxCircle(cx,holeCy,holeR)],
+      creases:[],
+    };
+  }
+  if(featureType==="thumb_cut"){
+    const r=clamp(Number(opts.radius)||20,5,Math.max(5,Math.min(panel.w*.45,panel.h*.45)));
+    const cy=panel.y+r;
+    return{path:`M ${cx-r} ${cy} A ${r} ${r} 0 0 0 ${cx+r} ${cy}`,kind:"cut",cuts:approxArc(cx,cy,r,Math.PI,0,12),creases:[]};
+  }
+  if(featureType==="tear_perf"){
+    const inset=clamp(Number(opts.inset)||6,0,Math.max(0,panel.w/4)),x0=panel.x+inset,x1=panel.x+panel.w-inset,y=yTop;
+    return{path:`M ${x0} ${y} L ${x1} ${y}`,kind:"crease",cuts:[],creases:[[x0,y,x1,y]]};
+  }
+  if(featureType==="window_cut"){
+    const ww=clamp(Number(opts.ww)||40,6,Math.max(6,panel.w-6)),hh=clamp(Number(opts.hh)||30,6,Math.max(6,panel.h-6));
+    const x0=cx-ww/2,y0=yTop-hh/2;
+    return{path:`M ${x0} ${y0} L ${x0+ww} ${y0} L ${x0+ww} ${y0+hh} L ${x0} ${y0+hh} Z`,kind:"cut",cuts:[[x0,y0,x0+ww,y0],[x0+ww,y0,x0+ww,y0+hh],[x0+ww,y0+hh,x0,y0+hh],[x0,y0+hh,x0,y0]],creases:[]};
+  }
+  if(featureType==="lock_tab"){
+    const tw=clamp(Number(opts.tabW)||24,8,Math.max(8,panel.w-4)),td=clamp(Number(opts.tabD)||12,4,Math.max(4,panel.h*.6));
+    const x0=cx-tw/2,x1=cx+tw/2,yt=panel.y;
+    return{path:`M ${x0} ${yt} L ${cx} ${yt-td} L ${x1} ${yt}`,kind:"cut",cuts:[[x0,yt,cx,yt-td],[cx,yt-td,x1,yt]],creases:[]};
+  }
+  return null;
+}
+
+function suggestFeaturePlacement(featureType, productBBox, productClearance, panelId, L, W, H){
+  if(!productBBox||!productClearance)return null;
+  if(featureType==="euro_hang"){
+    const y=15;
+    return{
+      x:L/2,y,width:32,height:7,
+      reasoning:`Centred on front panel, 15mm from top edge. Product clears hang hole by ${Math.round(H-productBBox.H-productClearance.top-y)}mm.`,
+    };
+  }
+  if(featureType==="thumb_cut"){
+    const shoulderHeight=productBBox.H*0.75;
+    const fromTop=H-shoulderHeight-productClearance.top;
+    return{
+      x:L/2,y:Math.max(10,fromTop),radius:Math.min(25,W*0.15),
+      reasoning:`Positioned at product shoulder height (${Math.round(shoulderHeight)}mm from base).`,
+    };
+  }
+  if(featureType==="window_cut"){
+    const winW=Math.round((productBBox.L*0.65)/5)*5;
+    const winH=Math.round((productBBox.H*0.55)/5)*5;
+    return{
+      x:L/2-winW/2,y:H/2-winH/2,width:winW,height:winH,
+      reasoning:`Window sized to show ${Math.round(winW)}x${Math.round(winH)}mm of product face.`,
+    };
+  }
+  if(featureType==="tear_perf"){
+    const tearY=H-(productBBox.H*0.8)-productClearance.top;
+    return{
+      y:Math.max(20,tearY),
+      reasoning:`Tear line at product shoulder (${Math.round(productBBox.H*0.8)}mm from base).`,
+    };
+  }
+  if(featureType==="lock_tab"){
+    const volume=(productBBox.L*productBBox.W*productBBox.H)/1000;
+    const isHeavy=volume>500;
+    return{
+      panel:isHeavy?"bottom-major":"top-tuck",
+      reasoning:isHeavy?`Product volume ~${Math.round(volume)}cm3 - bottom lock tabs recommended for base integrity.`:`Light product - top tuck lock tab is sufficient.`,
+    };
+  }
+  return null;
+}
+
+function FeatureIcon({id}){
+  const s={stroke:T.textMid,fill:"none",strokeWidth:1.3};
+  return(
+    <svg width={40} height={40} viewBox="0 0 40 40">
+      <rect x={5} y={6} width={30} height={26} fill="#fff" stroke="#D6D2C8" strokeWidth="1"/>
+      {id==="lock_tab"&&<path d="M13 14 L20 8 L27 14" {...s}/>}
+      {id==="lock_slot"&&<rect x={14} y={13} width={12} height={4} {...s}/>}
+      {id==="tuck_ext"&&<path d="M10 13 L30 13 L30 9 L10 9 Z" {...s}/>}
+      {id==="thumb_cut"&&<path d="M12 15 A8 8 0 0 0 28 15" {...s}/>}
+      {id==="tear_perf"&&<line x1={10} y1={18} x2={30} y2={18} stroke="#0000FF" strokeDasharray="2 2"/>}
+      {id==="zipper_tear"&&<><line x1={10} y1={16} x2={30} y2={16} stroke="#0000FF" strokeDasharray="2 2"/><line x1={10} y1={20} x2={30} y2={20} stroke="#0000FF" strokeDasharray="2 2"/></>}
+      {id==="euro_hang"&&<><rect x={12} y={15} width={16} height={5} rx={2.5} fill="none" stroke="#FF0000"/><circle cx={20} cy={10} r={3} fill="none" stroke="#FF0000"/></>}
+      {id==="round_hang"&&<circle cx={20} cy={14} r={4} fill="none" stroke="#FF0000"/>}
+      {id==="butterfly_slot"&&<path d="M14 13 C16 10 18 10 20 13 C22 10 24 10 26 13 C24 16 22 16 20 13 C18 16 16 16 14 13 Z" {...s}/>}
+      {id==="window_cut"&&<rect x={12} y={11} width={16} height={12} fill="none" stroke="#FF0000"/>}
+      {id==="display_lip"&&<path d="M10 13 L30 13 L26 20 L14 20 Z" {...s}/>}
+      {id==="vent_holes"&&<>{[12,20,28].map(x=><circle key={x} cx={x} cy={15} r={1.8} fill="none" stroke="#FF0000"/>)}</>}
+    </svg>
+  );
+}
+
+function DieFeatureLibrary({onPick}){
+  const cats=[...new Set(FEATURE_LIBRARY.map(f=>f.category))];
+  return(
+    <div style={{margin:"0 14px 12px",padding:"10px",background:T.surface,border:`1px solid ${T.border}`,borderRadius:10}}>
+      <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Die feature library</div>
+      {cats.map(cat=>(
+        <div key={cat} style={{marginBottom:10}}>
+          <div style={{fontSize:8,color:T.textLight,marginBottom:6}}>{cat}</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(74px,1fr))",gap:8}}>
+            {FEATURE_LIBRARY.filter(f=>f.category===cat).map(f=>(
+              <button key={f.id} onClick={()=>onPick(f)} style={{border:`1px solid ${T.border}`,borderRadius:8,padding:"6px 4px",background:"white",cursor:"pointer"}}>
+                <div style={{width:48,height:48,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"center"}}><FeatureIcon id={f.id}/></div>
+                <div style={{fontSize:8,color:T.textMid,marginTop:3,lineHeight:1.2}}>{f.name}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Style Selector ───────────────────────────────────────────────────────────
+function StyleSelector({current,onChange}){
+  const groups=[...new Set(Object.values(FEFCO).map(s=>s.group))];
+  return(
+    <div style={{padding:"12px 14px",background:T.surface,borderBottom:`1px solid ${T.border}`}}>
+      {groups.map(grp=>(
+        <div key={grp} style={{marginBottom:10}}>
+          <div style={{fontSize:8,color:T.textLight,letterSpacing:1,marginBottom:5}}>{grp}</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+            {Object.entries(FEFCO).filter(([,s])=>s.group===grp).map(([id,s])=>{
+              const isCurr=id===current,isSoon=s.r==="soon";
+              return(<button key={id} onClick={()=>!isSoon&&onChange(id)} title={s.name} style={{background:isCurr?T.purple:"none",border:`1px solid ${isCurr?T.purple:T.border}`,color:isCurr?"white":isSoon?T.textLight:T.textMid,padding:"4px 9px",fontSize:10,borderRadius:6,cursor:isSoon?"default":"pointer",fontWeight:isCurr?"700":"400",opacity:isSoon?.55:1}}>
+                {id}{isSoon&&<span style={{fontSize:7,marginLeft:3,opacity:.7}}>soon</span>}
+              </button>);
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Design tab ───────────────────────────────────────────────────────────────
+function DesignTab({L,W,H,lidH,style,setStyle,board,sel,setSel,setBoard,setLidH,setL,setW,setH,prompt,setPrompt,loading,setLoading,boardThicknessMm=4,productGeometry=null,productBBox=null,productClearance={top:10,bottom:10,left:8,right:8,front:8,back:8},productOrientation="upright",collisionCount=-1,onCollisionUpdate=null}){
+  const[subTab,setSubTab]=useState("flat");
+  const[showStyles,setShowStyles]=useState(false);
+  const[copied,setCopied]=useState(false);
+  const[showDXF,setShowDXF]=useState(false);
+  const[dxfTxt,setDxfTxt]=useState("");
+  const[err,setErr]=useState("");
+  const[panelCentroids,setPanelCentroids]=useState([]);
+  const[inspectorDraft,setInspectorDraft]=useState("");
+  const[panelLocks,setPanelLocks]=useState({});
+  const[toast,setToast]=useState(null);
+  const[placedFeatures,setPlacedFeatures]=useState([]);
+  const[featureDraft,setFeatureDraft]=useState(null);
+  const toastTimerRef=useRef(null);
+
+  const sInfo=FEFCO[style];
+  const flapCfg=sInfo?.flaps?.(W);
+  const geo=flapCfg?calcSlotted(L,W,H,flapCfg):null;
+  const trayGeo=style==="0300"?calcTray(L,W,H):null;
+  const{blankW=0,blankH=0,g:glue=0,topH=0,btmH=0}=geo||{};
+  const effBlankW=geo?.blankW??trayGeo?.blankW??0;
+  const effBlankH=geo?.blankH??trayGeo?.blankH??0;
+  const blankAreaMm2=effBlankW*effBlankH;
+  const blankAreaCm2=blankAreaMm2/100;
+
+  const selCtrl={bW1:"W",bW2:"W",glue:"W",bfW1:"W",bfW2:"W",bfL1:"W",bfL2:"W",tfW1:"W",tfW2:"W",tfL1:"W",tfL2:"W",bL1:"L",bL2:"L",base:"L",front:"H",back:"H",left:"W",right:"W"}[sel];
+
+  const onCentroids=useCallback(list=>{setPanelCentroids(Array.isArray(list)?list:[]);},[]);
+
+  const panelMeta=sel?getPanelEditorMeta(sel,style,L,W,H):null;
+  const centroid=sel&&panelCentroids.length?panelCentroids.find(c=>c.id===sel):null;
+  const slottedPanelDefs=useMemo(()=>getSlottedPanelDefs(L,W,H,style),[L,W,H,style]);
+  const panelMap=useMemo(()=>Object.fromEntries(slottedPanelDefs.map(p=>[p.id,p])),[slottedPanelDefs]);
+  const draftPreview=useMemo(()=>{
+    if(!featureDraft?.panelId)return null;
+    const panel=panelMap[featureDraft.panelId];
+    if(!panel)return null;
+    const g=buildFeatureGeometry(featureDraft.feature.id,panel,featureDraft);
+    if(!g)return null;
+    return{id:"preview",featureType:featureDraft.feature.id,panelId:featureDraft.panelId,svgPath:g.path,kind:g.kind,dxfCuts:g.cuts,dxfCreases:g.creases,preview:true};
+  },[featureDraft,panelMap]);
+
+  useEffect(()=>{
+    if(!panelMeta){setInspectorDraft("");return;}
+    setInspectorDraft(String(panelMeta.inputValue));
+  },[sel,style,L,W,H,panelMeta?.inputValue]);
+
+  useEffect(()=>{
+    Object.values(panelLocks).forEach(rec=>{
+      if(!rec||typeof rec!=="object"||!rec.editKey)return;
+      if(rec.editKey==="L"&&L!==rec.snapL)setL(rec.snapL);
+      if(rec.editKey==="W"&&W!==rec.snapW)setW(rec.snapW);
+      if(rec.editKey==="H"&&H!==rec.snapH)setH(rec.snapH);
+      if(rec.editKey==="glue"&&W!==rec.snapW)setW(rec.snapW);
+    });
+  },[L,W,H,panelLocks,setL,setW,setH]);
+
+  const showToast=msg=>{
+    if(toastTimerRef.current)clearTimeout(toastTimerRef.current);
+    setToast(msg);
+    toastTimerRef.current=setTimeout(()=>{setToast(null);toastTimerRef.current=null;},4500);
+  };
+
+  const freezeKeyForEdit=k=>(k==="glue"?"W":k);
+
+  const togglePanelLock=()=>{
+    if(!sel||!panelMeta)return;
+    setPanelLocks(p=>{
+      if(p[sel]){const n={...p};delete n[sel];return n;}
+      return{...p,[sel]:{editKey:panelMeta.editKey,snapL:L,snapW:W,snapH:H}};
+    });
+  };
+
+  const applyInspector=()=>{
+    if(!sel||!panelMeta||panelLocks[sel])return;
+    const v=parseInt(String(inspectorDraft).trim(),10);
+    if(!Number.isFinite(v))return;
+    const flapBefore=sInfo?.flaps?.(W);
+    const geoBeforeSlotted=flapBefore?calcSlotted(L,W,H,flapBefore):null;
+    const geoBeforeTray=style==="0300"?calcTray(L,W,H):null;
+    const bw0=geoBeforeSlotted?.blankW??geoBeforeTray?.blankW??0,bh0=geoBeforeSlotted?.blankH??geoBeforeTray?.blankH??0;
+    let newL=L,newW=W,newH=H;
+    let label="",oldVal,newVal;
+    if(panelMeta.editKey==="glue"){
+      const nw=bestWForGlueTarget(v);
+      if(nw==null)return;
+      oldVal=W;newVal=nw;newW=Math.min(nw,L);
+      label=`Width (glue) updated: ${oldVal} -> ${newVal}mm`;
+      setW(newW);
+    }else if(panelMeta.editKey==="L"){
+      oldVal=L;newVal=clamp(v,80,800);newL=newVal;newW=Math.min(W,newL);
+      label=`Length updated: ${oldVal} -> ${newVal}mm`;
+      setL(newL);if(newW!==W)setW(newW);
+    }else if(panelMeta.editKey==="W"){
+      oldVal=W;newVal=clamp(v,50,600);newW=newVal;newL=Math.max(L,newW);
+      label=`Width updated: ${oldVal} -> ${newVal}mm`;
+      setW(newW);if(newL!==L)setL(newL);
+    }else if(panelMeta.editKey==="H"){
+      oldVal=H;newVal=clamp(v,30,600);newH=newVal;
+      label=`Height updated: ${oldVal} -> ${newVal}mm`;
+      setH(newH);
+    }
+    const lA=panelMeta.editKey==="L"?newL:L,wA=panelMeta.editKey==="W"||panelMeta.editKey==="glue"?newW:W,hA=panelMeta.editKey==="H"?newH:H;
+    let bw1=bw0,bh1=bh0;
+    if(style==="0300"){const gt=calcTray(lA,wA,hA);bw1=gt.blankW;bh1=gt.blankH;}
+    else{const fa=sInfo?.flaps?.(wA);if(fa){const ga=calcSlotted(lA,wA,hA,fa);bw1=ga.blankW;bh1=ga.blankH;}}
+    if(bw0||bh0)showToast(`${label}. Blank: ${bw0}x${bh0}mm -> ${bw1}x${bh1}mm`);
+    else showToast(label);
+    setPanelLocks(p=>{
+      const n={...p};
+      let ch=false;
+      for(const id of Object.keys(n)){
+        const r=n[id];
+        if(!r||typeof r!=="object")continue;
+        if(panelMeta.editKey==="L"&&r.editKey==="L"){n[id]={...r,snapL:newL};ch=true;}
+        if((panelMeta.editKey==="W"||panelMeta.editKey==="glue")&&(r.editKey==="W"||r.editKey==="glue")){n[id]={...r,snapW:newW};ch=true;}
+        if(panelMeta.editKey==="H"&&r.editKey==="H"){n[id]={...r,snapH:newH};ch=true;}
+      }
+      return ch?n:p;
+    });
+  };
+
+  const driverColor={L:T.purple,W:T.green,H:T.blue}[freezeKeyForEdit(panelMeta?.editKey||"L")]||T.purple;
+
+  const handleExportDXF=()=>{
+    let txt="";
+    if(style==="0300")txt=genDXFTray(L,W,H);
+    else if(geo){
+      const fxCuts=placedFeatures.flatMap(f=>f.dxfCuts||[]);
+      const fxCreases=placedFeatures.flatMap(f=>f.dxfCreases||[]);
+      txt=genDXFSlotted(L,W,H,geo,fxCuts,fxCreases);
+    }
+    if(!txt)return;
+    setDxfTxt(txt);
+    const fname=`FEFCO_${style}_${L}x${W}x${H}mm.dxf`;
+    try{downloadDXF(txt,fname);setCopied(true);setTimeout(()=>setCopied(false),2500);}
+    catch{setShowDXF(true);}
+  };
+
+  const parseAI=async()=>{
+    if(!prompt.trim())return;
+    setLoading(true);setErr("");
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:150,
+          system:`Packaging engineer. Return ONLY JSON: {"L":number,"W":number,"H":number}. L>=W. Integers in mm.`,
+          messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      const txt=(data.content?.find(b=>b.type==="text")?.text||"").trim();
+      const p=JSON.parse(txt);
+      // We can't setL/W/H here as they come from parent — signal via a callback
+      // Instead we show the values and user can manually adjust
+      setErr(`Parsed: L=${p.L} W=${p.W} H=${p.H} mm - adjust sliders above`);
+    }catch{setErr("Try: '380 x 260 x 200mm B-flute'");}
+    setLoading(false);
+  };
+
+  const SUBTABS=[["3d","3D"],["flat","Flat / DXF"],["ai","AI"]];
+
+  return(
+    <div>
+      {/* Style header */}
+      <div style={{padding:"6px 14px",background:T.purpleLight,borderBottom:`1px solid ${T.purpleMid}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div>
+          <div style={{fontSize:11,color:T.purple,fontWeight:"600"}}>{sInfo?.name}</div>
+          <div style={{fontSize:9,color:T.textMid}}>{sInfo?.desc}</div>
+        </div>
+        <button onClick={()=>setShowStyles(v=>!v)} style={{background:showStyles?T.purple:T.purpleLight,border:`1px solid ${showStyles?T.purple:T.purpleMid}`,color:showStyles?"white":T.purple,padding:"5px 10px",borderRadius:8,fontSize:10,fontWeight:"600",cursor:"pointer"}}>
+          {style} {showStyles?"▲":"▼"}
+        </button>
+      </div>
+      {showStyles&&<StyleSelector current={style} onChange={id=>{ setStyle(id); setSel(null); setShowStyles(false); }}/>}
+
+      {/* Sub-tabs */}
+      <div style={{display:"flex",background:T.surface,borderBottom:`1px solid ${T.border}`}}>
+        {SUBTABS.map(([id,lbl])=>(<button key={id} onClick={()=>setSubTab(id)} style={{flex:1,padding:"8px 4px",background:"none",border:"none",borderBottom:`2px solid ${subTab===id?T.purple:"transparent"}`,color:subTab===id?T.purple:T.textMid,fontSize:10,fontWeight:subTab===id?"700":"400",cursor:"pointer"}}>{lbl}</button>))}
+      </div>
+      <div style={{padding:"8px 14px",background:T.purpleLight,borderBottom:`1px solid ${T.purpleMid}`,fontSize:10,color:T.purple,lineHeight:1.45}}>
+        {subTab==="flat"
+          ?<><strong>Panel editor</strong> - click any panel or flap on the dieline. Use the floating card to change dimensions (stays in sync with the L/W/H sliders). Constraint summary is under the drawing.</>
+          :<><strong>3D view</strong> - switch to <button type="button" onClick={()=>setSubTab("flat")} style={{background:T.purple,color:"white",border:"none",padding:"2px 10px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer"}}>Flat / DXF</button> for the 2D dieline, panel inspector, DXF export, and constraints.</>}
+      </div>
+
+      {subTab==="3d"&&<div style={{background:T.surface,borderBottom:`1px solid ${T.border}`}}>
+        <Box3D L={L} W={W} H={H} style={style} lidH={lidH} boardThickness={boardThicknessMm} productGeometry={productGeometry} productBBox={productBBox} productClearance={productClearance} productOrientation={productOrientation} onCollisionUpdate={onCollisionUpdate}/>
+        {productBBox&&collisionCount>=0&&(
+          <div style={{margin:"8px 14px 12px",padding:"8px 10px",borderRadius:8,fontSize:10,fontWeight:600,background:collisionCount>0?"#FEE2E2":"#DCFCE7",border:`1px solid ${collisionCount>0?"#FCA5A5":"#86EFAC"}`,color:collisionCount>0?"#991B1B":"#166534"}}>
+            {collisionCount>0?`Warning: ${collisionCount} panel(s) intersect the product. Increase clearance or adjust H/W/L.`:"OK: No interference - product fits cleanly"}
+          </div>
+        )}
+      </div>}
+
+      {subTab==="flat"&&(
+        <>
+          <div style={{padding:"6px 14px",background:T.surface,borderBottom:`1px solid ${T.border}`,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+            <div style={{fontSize:8,color:T.textMid,fontWeight:"600",letterSpacing:1}}>ARTIOS LAYERS</div>
+            {[{color:AC.CUT,dash:false,lbl:"Cut"},{color:AC.CREASE,dash:true,lbl:"Crease"}].map(({color,dash,lbl})=>(<div key={lbl} style={{display:"flex",alignItems:"center",gap:4}}><svg width={18} height={6}><line x1={0} y1={3} x2={18} y2={3} stroke={color} strokeWidth={1.6} strokeDasharray={dash?"5 3":"none"}/></svg><span style={{fontSize:9,color:T.textMid}}>{lbl}</span></div>))}
+            <button onClick={handleExportDXF} style={{marginLeft:"auto",background:copied?T.green:T.purple,border:"none",color:"white",padding:"5px 12px",borderRadius:7,fontSize:10,fontWeight:"700",cursor:"pointer",transition:"background .3s"}}>{copied?"Exported!":"Export DXF"}</button>
+          </div>
+          {copied&&(<div style={{margin:"6px 14px",padding:"7px 12px",background:"#F0FDF4",border:`1px solid ${T.green}44`,borderRadius:7,fontSize:10,color:T.green,display:"flex",justifyContent:"space-between"}}>
+            <span>Paste into text editor, save as .dxf</span>
+            <button onClick={()=>setShowDXF(v=>!v)} style={{background:"none",border:`1px solid ${T.green}`,color:T.green,padding:"2px 8px",borderRadius:5,fontSize:9,cursor:"pointer"}}>{showDXF?"Hide":"Show"}</button>
+          </div>)}
+          {showDXF&&dxfTxt&&(<div style={{margin:"0 14px 6px",padding:"6px",background:T.surface,border:`1px solid ${T.border}`,borderRadius:7}}><textarea readOnly value={dxfTxt} onFocus={e=>e.target.select()} style={{width:"100%",height:100,background:T.bg,border:`1px solid ${T.border}`,color:T.text,fontSize:8,fontFamily:"monospace",padding:5,resize:"none",outline:"none",borderRadius:5}}/></div>)}
+          <div style={{position:"relative",background:T.surface,borderBottom:`1px solid ${T.border}`}}>
+            {sInfo?.r==="slotted"&&<DieCutSlotted L={L} W={W} H={H} style={style} selected={sel} onSelect={setSel} onPanelCentroids={onCentroids} featurePaths={[...placedFeatures,(draftPreview||null)].filter(Boolean)} eligiblePanelIds={featureDraft?slottedPanelDefs.map(p=>p.id):[]} productBBox={productBBox} productClearance={productClearance}/>}
+            {style==="0300"&&<DieCutTray L={L} W={W} H={H} selected={sel} onSelect={setSel} onPanelCentroids={onCentroids}/>}
+            {sInfo?.r==="soon"&&<div style={{height:140,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:8,color:T.textLight}}><div style={{fontSize:20}}>Tool</div><div style={{fontSize:11}}>{sInfo.name} - coming soon</div></div>}
+            {sel&&panelMeta&&centroid&&(
+              <div style={{
+                position:"absolute",zIndex:4,
+                left:`min(88%, max(12%, ${centroid.cx*100}%))`,
+                top:`min(82%, max(8%, ${centroid.cy*100}%))`,
+                transform:"translate(-50%, calc(-100% - 10px))",
+                width:220,maxWidth:"92%",
+                background:T.surface,border:`1px solid ${T.border}`,borderLeft:`4px solid ${driverColor}`,
+                borderRadius:10,boxShadow:"0 8px 24px rgba(26,25,23,.12)",
+                padding:"10px 12px",fontSize:12,fontFamily:"ui-monospace,monospace",
+              }}>
+                <div style={{fontSize:8,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>{panelMeta.type.replace(/^\w/,c=>c.toUpperCase())} | {style}</div>
+                <div style={{fontWeight:700,color:T.text,marginTop:2}}>{panelMeta.name}</div>
+                <div style={{fontSize:11,color:T.textMid,marginTop:4}}>{panelMeta.wMm} x {panelMeta.hMm} mm</div>
+                <div style={{fontSize:10,color:driverColor,marginTop:6}}>Controlled by: {panelMeta.driverLabel}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8,flexWrap:"wrap"}}>
+                  <input type="number" min={1} value={inspectorDraft} disabled={!!panelLocks[sel]} onChange={e=>setInspectorDraft(e.target.value)}
+                    style={{width:88,padding:"6px 8px",borderRadius:6,border:`1px solid ${T.border}`,fontSize:12,fontFamily:"inherit",opacity:panelLocks[sel]?0.55:1}}/>
+                  <span style={{fontSize:10,color:T.textLight}}>mm</span>
+                  <button type="button" onClick={applyInspector} disabled={!!panelLocks[sel]} style={{
+                    padding:"6px 12px",borderRadius:6,border:"none",background:panelLocks[sel]?T.border:T.purple,color:"white",fontSize:10,fontWeight:700,cursor:panelLocks[sel]?"not-allowed":"pointer"}}>Apply</button>
+                </div>
+                <label style={{display:"flex",alignItems:"center",gap:6,marginTop:8,fontSize:10,color:T.textMid,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!panelLocks[sel]} onChange={togglePanelLock}/>
+                  Lock - freeze driving dimension vs sliders
+                </label>
+                <button type="button" onClick={()=>setSel(null)} style={{marginTop:8,width:"100%",padding:"6px",borderRadius:6,border:`1px solid ${T.border}`,background:T.bg,fontSize:10,cursor:"pointer"}}>Deselect</button>
+              </div>
+            )}
+          </div>
+          {(geo||trayGeo)&&(
+            <div style={{margin:"10px 14px 12px",padding:"12px 14px",background:T.bg,border:`1px solid ${T.border}`,borderRadius:10}}>
+              <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Constraint summary</div>
+              <div style={{display:"grid",gap:8,fontSize:11,fontFamily:"ui-monospace,monospace"}}>
+                <div><span style={{color:T.purple,fontWeight:700}}>L</span> {L} mm <span style={{color:T.textLight}}>- length faces, major flaps (L span)</span></div>
+                <div><span style={{color:T.green,fontWeight:700}}>W</span> {W} mm <span style={{color:T.textLight}}>- width faces, minor flaps, glue from W</span></div>
+                <div><span style={{color:T.blue,fontWeight:700}}>H</span> {H} mm <span style={{color:T.textLight}}>- panel height (erect carton)</span></div>
+                {geo&&<div style={{fontSize:10,color:T.textMid}}>Glue tab: {glue} mm <span style={{color:T.textLight}}>(auto max(28, round(W*0.12)))</span></div>}
+                <div style={{fontSize:10,color:T.text}}>Blank: <strong>{effBlankW} x {effBlankH} mm</strong></div>
+                <div style={{fontSize:10,color:T.text}}>Area: <strong>{Math.round(blankAreaMm2).toLocaleString()} mm²</strong> = {round1(blankAreaCm2)} cm²</div>
+                <div style={{fontSize:9,color:T.textLight}}>Board: {board}</div>
+              </div>
+            </div>
+          )}
+          {sInfo?.r==="slotted"&&(
+            <>
+              <DieFeatureLibrary onPick={f=>{
+                if(!f.implemented){showToast("Coming soon");return;}
+                setFeatureDraft({feature:f,panelId:sel||null,top:15,xPct:50,radius:20,ww:40,hh:30,tabW:24,tabD:12,slotW:32,slotH:7,holeR:3,inset:6});
+              }}/>
+              {placedFeatures.length>0&&<div style={{margin:"0 14px 12px",padding:"8px 10px",background:T.surface,border:`1px solid ${T.border}`,borderRadius:8}}>
+                <div style={{fontSize:8,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Placed features</div>
+                <div style={{display:"grid",gap:4}}>
+                  {placedFeatures.map(f=>(
+                    <div key={f.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10,fontFamily:"monospace"}}>
+                      <span>{(FEATURE_LIBRARY.find(x=>x.id===f.featureType)?.name||f.featureType)} on {f.panelId}</span>
+                      <button onClick={()=>setPlacedFeatures(prev=>prev.filter(x=>x.id!==f.id))} style={{border:`1px solid ${T.border}`,background:"white",borderRadius:6,padding:"2px 7px",fontSize:9,cursor:"pointer"}}>Remove</button>
+                    </div>
+                  ))}
+                </div>
+              </div>}
+            </>
+          )}
+          {geo&&(<div style={{margin:"0 14px 12px",padding:"10px",background:T.surface,border:`1px solid ${T.border}`,borderRadius:10,display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px 14px",fontSize:10,fontFamily:"monospace"}}>
+            {[["Top flap",`${topH}mm`,T.textMid],["Btm flap",`${btmH}mm`,T.textMid]].map(([k,v,c])=>(<div key={k}><div style={{fontSize:8,color:T.textLight}}>{k}</div><div style={{color:c,marginTop:1}}>{v}</div></div>))}
+          </div>)}
+        </>
+      )}
+
+      {subTab==="ai"&&(
+        <div style={{padding:14,background:T.surface,borderBottom:`1px solid ${T.border}`}}>
+          <div style={{fontSize:11,color:T.textMid,marginBottom:8}}>Describe your box</div>
+          <div style={{display:"flex",gap:8}}>
+            <input value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>e.key==="Enter"&&parseAI()} placeholder="e.g. 380x260x200mm B-flute RSC" style={{flex:1,background:T.bg,border:`1px solid ${T.border}`,color:T.text,padding:"8px 12px",fontSize:12,fontFamily:"monospace",outline:"none",borderRadius:8,WebkitAppearance:"none"}}/>
+            <button onClick={parseAI} disabled={loading} style={{background:loading?T.border:T.purple,border:"none",color:"white",padding:"8px 14px",borderRadius:8,fontSize:11,fontWeight:"700",cursor:loading?"not-allowed":"pointer"}}>{loading?"...":"Go"}</button>
+          </div>
+          {err&&<div style={{fontSize:10,marginTop:6,color:err.startsWith("Parsed")?T.green:"#DC2626"}}>{err}</div>}
+          <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:8}}>
+            {["330x330x40mm pizza","200x150x100mm mailer","600x400x300mm export"].map(ex=>(<button key={ex} onClick={()=>setPrompt(ex)} style={{background:T.bg,border:`1px solid ${T.border}`,color:T.textMid,padding:"4px 8px",fontSize:9,fontFamily:"monospace",cursor:"pointer",borderRadius:6}}>{ex}</button>))}
+          </div>
+        </div>
+      )}
+      {toast&&(
+        <div style={{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",zIndex:10000,maxWidth:"min(560px,92vw)",padding:"10px 16px",background:T.text,color:T.surface,borderRadius:10,fontSize:12,fontFamily:"ui-monospace,monospace",boxShadow:"0 10px 40px rgba(0,0,0,.2)"}}>
+          {toast}
+        </div>
+      )}
+      {featureDraft&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.25)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:10001}}>
+          <div style={{width:420,maxWidth:"92vw",background:"white",border:`1px solid ${T.border}`,borderRadius:10,padding:12}}>
+            <div style={{fontSize:12,fontWeight:700,color:T.text}}>Place feature | {featureDraft.feature.name}</div>
+            <div style={{fontSize:9,color:T.textLight,marginTop:3}}>Select which panel to place this on</div>
+            <select value={featureDraft.panelId||""} onChange={e=>setFeatureDraft(v=>({...v,panelId:e.target.value||null}))} style={{marginTop:8,width:"100%",padding:"7px 8px",border:`1px solid ${T.border}`,borderRadius:7,fontSize:11}}>
+              <option value="">Select panel</option>
+              {slottedPanelDefs.map(p=><option key={p.id} value={p.id}>{p.id}</option>)}
+            </select>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:10}}>
+              <label style={{fontSize:9,color:T.textMid}}>Distance from top edge (mm)<input type="number" value={featureDraft.top} min={0} onChange={e=>setFeatureDraft(v=>({...v,top:Number(e.target.value)}))} style={{marginTop:3,width:"100%",padding:"6px",border:`1px solid ${T.border}`,borderRadius:6}}/></label>
+              <label style={{fontSize:9,color:T.textMid}}>Custom X (%)<input type="number" value={featureDraft.xPct} min={0} max={100} onChange={e=>setFeatureDraft(v=>({...v,xPct:Number(e.target.value)}))} style={{marginTop:3,width:"100%",padding:"6px",border:`1px solid ${T.border}`,borderRadius:6}}/></label>
+            </div>
+            {productBBox&&featureDraft.panelId&&(
+              <div style={{marginTop:8,padding:"8px 9px",border:`1px solid ${T.purpleMid}`,background:T.purpleLight,borderRadius:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                  <div style={{fontSize:10,color:T.purple,fontWeight:700}}>* Smart suggestion based on product geometry</div>
+                  <button onClick={()=>{
+                    const panel=panelMap[featureDraft.panelId];if(!panel)return;
+                    const s=suggestFeaturePlacement(featureDraft.feature.id,productBBox,productClearance,featureDraft.panelId,L,W,H);
+                    if(!s)return;
+                    setFeatureDraft(v=>{
+                      let n={...v};
+                      if(Number.isFinite(s.y))n.top=round1(s.y);
+                      if(Number.isFinite(s.radius))n.radius=round1(s.radius);
+                      if(Number.isFinite(s.width)&&Number.isFinite(panel?.w))n.ww=round1(s.width);
+                      if(Number.isFinite(s.height))n.hh=round1(s.height);
+                      if(Number.isFinite(s.x)&&Number.isFinite(panel?.w)){
+                        const cx=Number.isFinite(s.width)?(s.x+(s.width/2)):s.x;
+                        n.xPct=clamp((cx/panel.w)*100,0,100);
+                      }
+                      if(typeof s.panel==="string"&&slottedPanelDefs.some(p=>p.id===s.panel))n.panelId=s.panel;
+                      n.suggestionReason=s.reasoning||"";
+                      return n;
+                    });
+                  }} style={{border:`1px solid ${T.purple}`,background:"white",color:T.purple,padding:"4px 8px",borderRadius:6,fontSize:9,fontWeight:700,cursor:"pointer"}}>Apply suggestion</button>
+                </div>
+                {(()=>{
+                  const s=suggestFeaturePlacement(featureDraft.feature.id,productBBox,productClearance,featureDraft.panelId,L,W,H);
+                  return s?.reasoning?<div style={{marginTop:6,fontSize:9,color:T.textMid,fontStyle:"italic"}}>{s.reasoning}</div>:null;
+                })()}
+              </div>
+            )}
+            {featureDraft.feature.id==="thumb_cut"&&<label style={{display:"block",fontSize:9,color:T.textMid,marginTop:8}}>Radius (mm)<input type="number" value={featureDraft.radius} min={5} onChange={e=>setFeatureDraft(v=>({...v,radius:Number(e.target.value)}))} style={{marginTop:3,width:"100%",padding:"6px",border:`1px solid ${T.border}`,borderRadius:6}}/></label>}
+            {featureDraft.feature.id==="window_cut"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:8}}>
+              <label style={{fontSize:9,color:T.textMid}}>Window W<input type="number" value={featureDraft.ww} onChange={e=>setFeatureDraft(v=>({...v,ww:Number(e.target.value)}))} style={{marginTop:3,width:"100%",padding:"6px",border:`1px solid ${T.border}`,borderRadius:6}}/></label>
+              <label style={{fontSize:9,color:T.textMid}}>Window H<input type="number" value={featureDraft.hh} onChange={e=>setFeatureDraft(v=>({...v,hh:Number(e.target.value)}))} style={{marginTop:3,width:"100%",padding:"6px",border:`1px solid ${T.border}`,borderRadius:6}}/></label>
+            </div>}
+            {featureDraft.feature.id==="lock_tab"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:8}}>
+              <label style={{fontSize:9,color:T.textMid}}>Tab W<input type="number" value={featureDraft.tabW} onChange={e=>setFeatureDraft(v=>({...v,tabW:Number(e.target.value)}))} style={{marginTop:3,width:"100%",padding:"6px",border:`1px solid ${T.border}`,borderRadius:6}}/></label>
+              <label style={{fontSize:9,color:T.textMid}}>Tab depth<input type="number" value={featureDraft.tabD} onChange={e=>setFeatureDraft(v=>({...v,tabD:Number(e.target.value)}))} style={{marginTop:3,width:"100%",padding:"6px",border:`1px solid ${T.border}`,borderRadius:6}}/></label>
+            </div>}
+            <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:12}}>
+              <button onClick={()=>setFeatureDraft(null)} style={{border:`1px solid ${T.border}`,background:"white",borderRadius:7,padding:"6px 10px",fontSize:10,cursor:"pointer"}}>Cancel</button>
+              <button onClick={()=>{
+                if(!featureDraft.panelId){showToast("Select a panel");return;}
+                const panel=panelMap[featureDraft.panelId];if(!panel){showToast("Invalid panel");return;}
+                const g=buildFeatureGeometry(featureDraft.feature.id,panel,featureDraft);if(!g){showToast("Feature not implemented");return;}
+                setPlacedFeatures(prev=>[...prev,{id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),featureType:featureDraft.feature.id,panelId:featureDraft.panelId,position:{top:featureDraft.top,xPct:featureDraft.xPct},size:{...featureDraft},svgPath:g.path,kind:g.kind,dxfCuts:g.cuts,dxfCreases:g.creases}]);
+                setFeatureDraft(null);
+              }} style={{border:"none",background:T.purple,color:"white",borderRadius:7,padding:"6px 10px",fontSize:10,fontWeight:700,cursor:"pointer"}}>Place</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Pack tab ─────────────────────────────────────────────────────────────────
+function PackTab({box,fillPatterns,bestFill}){
+  const[productType,setProductType]=useState("box");
+  const[pL,setPL]=useState(90);const[pW,setPW]=useState(60);const[pH,setPH]=useState(40);
+  const[pDia,setPDia]=useState(50);const[gap,setGap]=useState(4);
+  const[fillIdx,setFillIdx]=useState(0);
+
+  const product=useMemo(()=>productType==="box"
+    ?{type:"box",L:clamp(pL,1,10000),W:clamp(pW,1,10000),H:clamp(pH,1,10000),gap:clamp(gap,0,100)}
+    :{type:"cylinder",diameter:clamp(pDia,1,10000),H:clamp(pH,1,10000),gap:clamp(gap,0,100)}
+  ,[productType,pL,pW,pH,pDia,gap]);
+
+  const fills=useMemo(()=>buildFillPatterns(box,product),[box,product]);
+  const best=fills[0]||null;
+  const current=fills[fillIdx]||null;
+
+  return(
+    <div style={{padding:14,display:"grid",gap:12}}>
+      {/* Product inputs */}
+      <div style={{padding:12,border:`1px solid ${T.border}`,borderRadius:12,background:T.bg}}>
+        <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Product Dimensions</div>
+        <SelectField label="Product type" value={productType} onChange={setProductType} options={[{id:"box",label:"Box / cuboid"},{id:"cylinder",label:"Cylinder / can"}]}/>
+        <div style={{marginTop:8,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+          {productType==="box"
+            ?<><Field label="Prod L" value={pL} onChange={setPL}/><Field label="Prod W" value={pW} onChange={setPW}/><Field label="Prod H" value={pH} onChange={setPH}/></>
+            :<><Field label="Diameter" value={pDia} onChange={setPDia}/><Field label="Height" value={pH} onChange={setPH}/><Field label="Gap" value={gap} onChange={setGap} min={0}/></>}
+          {productType==="box"&&<Field label="Gap mm" value={gap} onChange={setGap} min={0}/>}
+        </div>
+      </div>
+
+      {/* 3D view */}
+      <div style={{padding:12,border:`1px solid ${T.border}`,borderRadius:12,background:T.surface}}>
+        <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Product in Carton · 3D</div>
+        <ProductInCarton3D box={box} product={product} fillPattern={current||best}/>
+      </div>
+
+      {/* Summary */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <Card title="Best fit" value={best?.count??0} sub={best?.name||"No result"} color={T.green}/>
+        <Card title="Utilisation" value={`${round1((best?.utilisation||0)*100)}%`} sub="Packed vol / carton vol" color={T.blue}/>
+      </div>
+
+      {/* Patterns */}
+      <div style={{padding:12,border:`1px solid ${T.border}`,borderRadius:12,background:T.surface}}>
+        <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>All Patterns</div>
+        <div style={{display:"grid",gap:6}}>
+          {fills.slice(0,8).map((p,i)=>(<PatternRow key={p.id} p={p} active={i===fillIdx} isBest={i===0} onClick={()=>setFillIdx(i)} rightValue={p.count} rightLabel="units"/>))}
+          {fills.length===0&&<div style={{fontSize:11,color:T.textLight,textAlign:"center",padding:12}}>No products fit. Check dimensions.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Pallet tab ───────────────────────────────────────────────────────────────
+function PalletReport({box,pallet,palletPattern,palletPreset,board,style}){
+  const best=palletPattern;
+  if(!best)return null;
+  const cVol=round1((box.L*box.W*box.H)/1e6);
+  const util=best.utilisation?round1(best.utilisation*100):0;
+  const stackText=best.description?`${best.name} — ${best.description}`:best.name||"—";
+  const rows=[
+    ["Carton dimensions",`${box.L} x ${box.W} x ${box.H} mm`],
+    ["Pallet standard",palletPreset],
+    ["Pallet footprint",`${pallet.L} x ${pallet.W} mm`],
+    ["Pallet max height",`${pallet.maxH} mm`],
+    ["Stacking pattern",stackText],
+    ["Pattern type",best.strategy||"—"],
+    ["Compression efficiency",compressionLabel(best.strategy)],
+    ["Cartons per layer",`${best.layerCount||0}`],
+    ["Layers",`${best.maxLayers||0}`],
+    ["Total cartons / pallet",`${best.totalCartons||0}`],
+    ["Carton volume",`${cVol} L`],
+    ["Cube utilisation",`${util}%`],
+    ["FEFCO style",style],
+    ["Board type",board],
+  ];
+
+  const ensureJsPdf=async()=>{
+    if(window.jspdf?.jsPDF)return window.jspdf.jsPDF;
+    try{
+      const mod=await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm");
+      if(mod?.jsPDF)return mod.jsPDF;
+    }catch{}
+    await new Promise((res,rej)=>{
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+      s.onload=res;s.onerror=rej;
+      document.head.appendChild(s);
+    });
+    if(!window.jspdf?.jsPDF)throw new Error("jsPDF unavailable");
+    return window.jspdf.jsPDF;
+  };
+
+  const exportPDF=async()=>{
+    let jsPDF;
+    try{
+      jsPDF=await ensureJsPdf();
+    }catch{
+      alert("PDF export failed: could not load jsPDF library.");
+      return;
+    }
+    const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+    const pw=210,ph=297,ml=18,mr=18,mt=22;
+    let y=mt;
+
+    // Header bar
+    doc.setFillColor(124,58,237);
+    doc.rect(0,0,pw,18,"F");
+    doc.setTextColor(255,255,255);
+    doc.setFontSize(13);doc.setFont("helvetica","bold");
+    doc.text("HookePak — Pallet Optimisation Report",ml,12);
+    doc.setFontSize(8);doc.setFont("helvetica","normal");
+    doc.text(`Generated ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`,pw-mr,12,{align:"right"});
+    y=26;
+
+    // KPI boxes
+    const kpis=[
+      ["CARTONS / PALLET",`${best.totalCartons||0}`,"7C3AED"],
+      ["PER LAYER",`${best.layerCount||0}`,"059669"],
+      ["CUBE EFFICIENCY",`${util}%`,util>75?"059669":util>50?"B45309":"DC2626"],
+    ];
+    const kw=(pw-ml-mr-8)/3;
+    kpis.forEach(([label,val,hex],i)=>{
+      const kx=ml+i*(kw+4);
+      const r=parseInt(hex.slice(0,2),16),g2=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
+      doc.setFillColor(r,g2,b);
+      doc.setDrawColor(r,g2,b);
+      doc.roundedRect(kx,y,kw,18,2,2,"FD");
+      doc.setTextColor(255,255,255);
+      doc.setFontSize(18);doc.setFont("helvetica","bold");
+      doc.text(val,kx+kw/2,y+11,{align:"center"});
+      doc.setFontSize(6);doc.setFont("helvetica","normal");
+      doc.text(label,kx+kw/2,y+16,{align:"center"});
+    });
+    y+=24;
+
+    // Section: Data table
+    doc.setTextColor(100,90,80);
+    doc.setFontSize(8);doc.setFont("helvetica","bold");
+    doc.text("SPECIFICATION",ml,y);
+    y+=4;
+    doc.setDrawColor(229,227,221);
+    doc.line(ml,y,pw-mr,y);
+    y+=4;
+
+    rows.forEach(([k,v],i)=>{
+      const rowH=7;
+      if(i%2===0){doc.setFillColor(249,248,246);doc.rect(ml,y-4,pw-ml-mr,rowH,"F");}
+      doc.setTextColor(107,101,96);doc.setFontSize(8);doc.setFont("helvetica","normal");
+      doc.text(k,ml+2,y);
+      doc.setTextColor(26,25,23);doc.setFont("helvetica","bold");
+      doc.text(v,pw-mr-2,y,{align:"right"});
+      y+=rowH;
+    });
+    y+=4;
+    doc.setDrawColor(229,227,221);doc.line(ml,y,pw-mr,y);
+    y+=8;
+
+    // Efficiency bar
+    doc.setTextColor(100,90,80);doc.setFontSize(8);doc.setFont("helvetica","bold");
+    doc.text("CUBE EFFICIENCY",ml,y);y+=5;
+    const barW=pw-ml-mr,barH=5;
+    doc.setFillColor(229,227,221);doc.roundedRect(ml,y,barW,barH,1,1,"F");
+    const fillW=barW*(Math.min(util,100)/100);
+    const fr=util>75?5:util>50?180:220,fg=util>75?150:util>50?120:50,fb=util>75?105:util>50?9:50;
+    doc.setFillColor(fr,fg,fb);
+    if(fillW>0)doc.roundedRect(ml,y,fillW,barH,1,1,"F");
+    y+=barH+4;
+    doc.setTextColor(107,101,96);doc.setFontSize(7);doc.setFont("helvetica","normal");
+    const advice=util>75?"Excellent cube density — well optimised.":util>50?"Good. Consider adjusting carton or pallet size to improve.":"Low utilisation — review carton dimensions vs pallet footprint.";
+    doc.text(advice,ml,y);
+    y+=8;
+
+    // Footer
+    doc.setDrawColor(229,227,221);doc.line(ml,ph-14,pw-mr,ph-14);
+    doc.setTextColor(168,162,158);doc.setFontSize(7);
+    doc.text("HookePak by Hooke-X Technologies Ltd  |  hookepak.com",ml,ph-9);
+    doc.text("Page 1 of 1",pw-mr,ph-9,{align:"right"});
+
+    doc.save(`HookePak_Pallet_Report_${style}_${new Date().toISOString().slice(0,10)}.pdf`);
+  };
+  return(
+    <div style={{padding:14,border:`1px solid ${T.border}`,borderRadius:12,background:T.surface}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div>
+          <div style={{fontSize:11,fontWeight:700,color:T.text}}>Pallet Optimisation Report</div>
+          <div style={{fontSize:9,color:T.textMid}}>CapePak-style summary</div>
+        </div>
+        <button onClick={exportPDF} style={{border:"1px solid #7C3AED",background:"#EDE9FE",color:"#7C3AED",padding:"5px 12px",borderRadius:7,fontSize:9,cursor:"pointer",fontWeight:700}}>
+          ⬇ Export PDF
+        </button>
+      </div>
+      {/* Key metrics banner */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
+        <div style={{padding:10,background:T.purpleLight,borderRadius:10,textAlign:"center"}}>
+          <div style={{fontSize:20,fontWeight:800,color:T.purple}}>{best.totalCartons||0}</div>
+          <div style={{fontSize:8,color:T.purple,marginTop:2}}>CARTONS / PALLET</div>
+        </div>
+        <div style={{padding:10,background:"#ECFDF5",borderRadius:10,textAlign:"center"}}>
+          <div style={{fontSize:20,fontWeight:800,color:T.green}}>{best.layerCount||0}</div>
+          <div style={{fontSize:8,color:T.green,marginTop:2}}>PER LAYER</div>
+        </div>
+        <div style={{padding:10,background:"#FFF7ED",borderRadius:10,textAlign:"center"}}>
+          <div style={{fontSize:20,fontWeight:800,color:T.amber}}>{util}%</div>
+          <div style={{fontSize:8,color:T.amber,marginTop:2}}>CUBE EFFICIENCY</div>
+        </div>
+      </div>
+      {/* Data table */}
+      <div style={{borderRadius:8,overflow:"hidden",border:`1px solid ${T.border}`}}>
+        {rows.map(([k,v],i)=>(
+          <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"7px 10px",background:i%2===0?T.bg:T.surface,borderBottom:i<rows.length-1?`1px solid ${T.border}`:"none"}}>
+            <span style={{fontSize:10,color:T.textMid}}>{k}</span>
+            <span style={{fontSize:10,fontWeight:600,color:T.text,fontFamily:"monospace"}}>{v}</span>
+          </div>
+        ))}
+      </div>
+      {/* Efficiency bar */}
+      <div style={{marginTop:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:T.textMid,marginBottom:4}}>
+          <span>Cube utilisation</span><span style={{fontWeight:700,color:util>75?T.green:util>50?T.amber:"#DC2626"}}>{util}%</span>
+        </div>
+        <div style={{height:6,background:T.border,borderRadius:3}}>
+          <div style={{height:6,width:`${Math.min(util,100)}%`,background:util>75?T.green:util>50?T.amber:"#DC2626",borderRadius:3,transition:"width .4s"}}/>
+        </div>
+        <div style={{fontSize:8,color:T.textLight,marginTop:4}}>
+          {util>75?"Excellent — high cube density":""}
+          {util>50&&util<=75?"Good — consider alternative dimensions":""}
+          {util<=50?"Low utilisation — optimise carton or pallet size":""}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PalletTab({box,style,board}){
+  const[palletPreset,setPalletPreset]=useState("UK 1200x1000");
+  const[palletIdx,setPalletIdx]=useState(0);
+  const[showReport,setShowReport]=useState(false);
+  const pallet=PALLETS[palletPreset];
+  const patterns=useMemo(()=>buildPalletPatterns(pallet,box,0),[pallet,box]);
+  const best=patterns[0]||null;
+  const current=patterns[palletIdx]||null;
+
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"200px 1fr",minHeight:"calc(100vh - 140px)"}}>
+      {/* Left panel: controls */}
+      <div style={{borderRight:`1px solid ${T.border}`,padding:12,background:T.bg,display:"grid",gap:10,alignContent:"start"}}>
+        <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>Pallet Settings</div>
+        <SelectField label="Pallet standard" value={palletPreset} onChange={setPalletPreset} options={Object.keys(PALLETS)}/>
+        <div style={{padding:10,background:T.surface,borderRadius:10,border:`1px solid ${T.border}`}}>
+          <div style={{fontSize:8,color:T.textLight,marginBottom:4}}>PALLET</div>
+          <div style={{fontSize:13,fontWeight:700,color:T.amber}}>{pallet.L}×{pallet.W}mm</div>
+          <div style={{fontSize:9,color:T.textMid}}>Max H: {pallet.maxH}mm</div>
+        </div>
+        <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginTop:4}}>Patterns</div>
+        <div style={{display:"grid",gap:6}}>
+          {patterns.map((p,i)=>(
+            <button key={p.id} onClick={()=>setPalletIdx(i)} style={{
+              textAlign:"left",padding:"8px 10px",borderRadius:9,cursor:"pointer",
+              border:`1px solid ${i===palletIdx?T.purple:i===0?T.green:T.border}`,
+              background:i===palletIdx?T.purpleLight:i===0?"#ECFDF5":"white"}}>
+              <div style={{fontSize:10,fontWeight:700,color:i===palletIdx?T.purple:T.text}}>{p.name}{i===0?" · Best":""}</div>
+              <div style={{fontSize:8,color:T.textLight,marginTop:2}}>{p.description}</div>
+              <div style={{fontSize:11,fontWeight:800,color:T.green,marginTop:2}}>{p.totalCartons} <span style={{fontSize:8,fontWeight:400,color:T.textMid}}>cartons</span></div>
+              {i===palletIdx&&<div style={{fontSize:9,fontWeight:700,color:T.blue,marginTop:2}}>{p.layerCount} / layer</div>}
+            </button>
+          ))}
+        </div>
+        <div style={{display:"grid",gap:6,marginTop:4}}>
+          <div style={{padding:8,background:T.surface,borderRadius:8,border:`1px solid ${T.border}`}}>
+            <div style={{fontSize:8,color:T.textLight}}>LAYERS</div>
+            <div style={{fontSize:16,fontWeight:800,color:T.blue}}>{best?.maxLayers??0}</div>
+          </div>
+          <div style={{padding:8,background:T.surface,borderRadius:8,border:`1px solid ${T.border}`}}>
+            <div style={{fontSize:8,color:T.textLight}}>UTILISATION</div>
+            <div style={{fontSize:16,fontWeight:800,color:T.purple}}>{round1((best?.utilisation||0)*100)}%</div>
+          </div>
+        </div>
+        <button onClick={()=>setShowReport(v=>!v)} style={{
+          marginTop:4,padding:"8px 0",borderRadius:9,border:`1px solid ${T.purple}`,
+          background:showReport?T.purple:T.purpleLight,color:showReport?"white":T.purple,
+          fontSize:10,fontWeight:700,cursor:"pointer"}}>
+          {showReport?"Hide Report":"Generate Report"}
+        </button>
+      </div>
+
+      {/* Right panel: 3D + optional report */}
+      <div style={{padding:14,display:"grid",gap:12,alignContent:"start"}}>
+        <div style={{padding:12,border:`1px solid ${T.border}`,borderRadius:12,background:T.surface}}>
+          <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>
+            Pallet 3D · {current?.name||""}
+          </div>
+          <Pallet3D box={box} pallet={pallet} palletPattern={current||best}/>
+        </div>
+        {showReport&&<PalletReport box={box} pallet={pallet} palletPattern={best} palletPreset={palletPreset} board={board} style={style}/>}
+      </div>
+    </div>
+  );
+}
+// ─── ROI tab ──────────────────────────────────────────────────────────────────
+function ROITab({L,W,H,style,board,saved,setSaved,onExport}){
+  const[productType,setProductType]=useState("box");
+  const[pL,setPL]=useState(90);const[pW,setPW]=useState(60);const[pH,setPH]=useState(40);
+  const[palletPreset,setPalletPreset]=useState("UK 1200x1000");
+  const[unitCost,setUnitCost]=useState(0.45);
+  const[palletCost,setPalletCost]=useState(85);
+
+  const box=useMemo(()=>({L:clamp(L,1,9999),W:clamp(W,1,9999),H:clamp(H,1,9999)}),[L,W,H]);
+
+  const product=useMemo(()=>({type:"box",L:clamp(pL,1,9999),W:clamp(pW,1,9999),H:clamp(pH,1,9999),gap:4}),[pL,pW,pH]);
+  const pallet=PALLETS[palletPreset];
+  const fills=useMemo(()=>buildFillPatterns(box,product),[box,product]);
+  const palletPatterns=useMemo(()=>buildPalletPatterns(pallet,box,0),[pallet,box]);
+  const bestFill=fills[0]||null;
+  const bestPallet=palletPatterns[0]||null;
+  const unitsPerCarton=bestFill?.count||0;
+  const cartonsPerPallet=bestPallet?.totalCartons||0;
+  const unitsPerPallet=unitsPerCarton*cartonsPerPallet;
+  const costPerPallet=cartonsPerPallet*palletCost;
+  const costPerUnit=unitsPerPallet>0?costPerPallet/unitsPerPallet:0;
+
+  const scenario={style,board,carton:{L,W,H},product:{type:productType,L:pL,W:pW,H:pH},palletPreset,unitsPerCarton,cartonsPerPallet,unitsPerPallet,bestFill:bestFill?.name,bestPallet:bestPallet?.name};
+
+  const saveScenario=()=>{
+    const item={id:Date.now().toString(),name:`${style} · ${board} · ${unitsPerPallet} units/pallet`,scenario};
+    setSaved(prev=>[item,...prev].slice(0,10));
+  };
+
+  return(
+    <div style={{padding:14,display:"grid",gap:12}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <div style={{display:"grid",gap:8}}>
+          <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>Product</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}><Field label="Prod L" value={pL} onChange={setPL}/><Field label="Prod W" value={pW} onChange={setPW}/><Field label="Prod H" value={pH} onChange={setPH}/></div>
+          <SelectField label="Pallet" value={palletPreset} onChange={setPalletPreset} options={Object.keys(PALLETS)}/>
+        </div>
+        <div style={{display:"grid",gap:8}}>
+          <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>Costs</div>
+          <Field label="Unit cost (£)" value={unitCost} onChange={setUnitCost} min={0} step={0.01}/>
+          <Field label="Carton cost (£)" value={palletCost} onChange={setPalletCost} min={0} step={1}/>
+        </div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <Card title="Units / carton" value={unitsPerCarton} sub={bestFill?.name||""} color={T.green}/>
+        <Card title="Cartons / pallet" value={cartonsPerPallet} sub={bestPallet?.name||""} color={T.blue}/>
+        <Card title="Units / pallet" value={unitsPerPallet} sub={`${style} · ${board}`} color={T.purple}/>
+        <Card title="Cost / unit (carton)" value={`£${costPerUnit.toFixed(3)}`} sub="Carton cost spread" color={T.amber}/>
+      </div>
+
+      <div style={{padding:12,border:`1px solid ${T.border}`,borderRadius:12,background:T.bg,fontSize:12,color:T.textMid,lineHeight:1.8}}>
+        Pack <span style={{color:T.green,fontWeight:800}}>{unitsPerCarton}</span> products per carton, stack <span style={{color:T.blue,fontWeight:800}}>{cartonsPerPallet}</span> cartons per pallet = <span style={{color:T.purple,fontWeight:800}}>{unitsPerPallet}</span> units per pallet.
+      </div>
+
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={saveScenario} style={{flex:1,border:`1px solid ${T.green}`,background:"#ECFDF5",color:T.green,padding:"9px 0",borderRadius:10,fontSize:11,fontWeight:700,cursor:"pointer"}}>Save Scenario</button>
+        <button onClick={()=>onExport(scenario)} style={{flex:1,border:`1px solid ${T.purple}`,background:T.purpleLight,color:T.purple,padding:"9px 0",borderRadius:10,fontSize:11,fontWeight:700,cursor:"pointer"}}>Copy JSON</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Scenarios tab ────────────────────────────────────────────────────────────
+function ScenariosTab({saved,setSaved,onExport}){
+  return(
+    <div style={{padding:14}}>
+      <div style={{fontSize:9,color:T.textLight,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Saved Scenarios</div>
+      {saved.length===0
+        ?<div style={{padding:16,border:`1px dashed ${T.border}`,borderRadius:12,background:T.bg,color:T.textLight,fontSize:11,textAlign:"center"}}>No saved scenarios yet. Use the ROI tab to save one.</div>
+        :<div style={{display:"grid",gap:8}}>
+          {saved.map(item=>(<div key={item.id} style={{padding:11,border:`1px solid ${T.border}`,borderRadius:11,background:T.bg,display:"flex",justifyContent:"space-between",gap:10,alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:700}}>{item.name}</div>
+              <div style={{fontSize:10,color:T.textMid,marginTop:2}}>{item.scenario.unitsPerCarton} units/carton · {item.scenario.cartonsPerPallet} cartons/pallet · {item.scenario.unitsPerPallet} units/pallet</div>
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>onExport(item.scenario)} style={{border:`1px solid ${T.purple}`,background:"white",color:T.purple,padding:"6px 10px",borderRadius:8,fontSize:10,fontWeight:700,cursor:"pointer"}}>Export</button>
+              <button onClick={()=>setSaved(prev=>prev.filter(s=>s.id!==item.id))} style={{border:`1px solid ${T.border}`,background:"white",color:T.textLight,padding:"6px 10px",borderRadius:8,fontSize:10,cursor:"pointer"}}>✕</button>
+            </div>
+          </div>))}
+        </div>}
+    </div>
+  );
+}
+
+// ─── Root App ─────────────────────────────────────────────────────────────────
+const MAIN_TABS=[["design","Design"],["pack","Pack"],["pallet","Pallet"],["roi","ROI"],["scenarios","Scenarios"]];
+
+function HookePakApp(){
+  // Single source of truth for carton dimensions
+  const[L,setL]=useState(380);
+  const[W,setW]=useState(260);
+  const[H,setH]=useState(200);
+  const[lidH,setLidH]=useState(60);
+  const[style,setStyle]=useState("0201");
+  const[board,setBoard]=useState("B-flute");
+  const[tab,setTab]=useState("design");
+  const[sel,setSel]=useState(null);
+  const[prompt,setPrompt]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[saved,setSaved]=useState([]);
+  const [productGeometry, setProductGeometry] = useState(null);
+  const [productBBox, setProductBBox] = useState(null);
+  const [productFile, setProductFile] = useState(null);
+  const [productUnit, setProductUnit] = useState("mm");
+  const [productOrientation, setProductOrientation] = useState("upright");
+  const [productClearance, setProductClearance] = useState({top:10,bottom:10,left:8,right:8,front:8,back:8});
+  const [aiClearances, setAiClearances] = useState(null);
+  const [collisionCount, setCollisionCount] = useState(-1);
+  const [autoApplyOrientation, setAutoApplyOrientation] = useState(true);
+  const [productLoading,setProductLoading]=useState(false);
+  const [productError,setProductError]=useState("");
+  const [productSuggestion,setProductSuggestion]=useState(null);
+  const [suggestLoading,setSuggestLoading]=useState(false);
+  const [appToast,setAppToast]=useState("");
+  const productInputRef=useRef(null);
+
+  const box=useMemo(()=>({L:clamp(L,1,9999),W:clamp(W,1,9999),H:clamp(H,1,9999)}),[L,W,H]);
+
+  const boardThicknessMm = useMemo(()=>{
+    const map={"E-flute":1.5,"B-flute":3,"C-flute":4,"BC double":7,"Solid board":1};
+    return map[board]??3;
+  },[board]);
+
+  const selCtrl={bW1:"W",bW2:"W",glue:"W",bfW1:"W",bfW2:"W",bfL1:"W",bfL2:"W",tfW1:"W",tfW2:"W",tfL1:"W",tfL2:"W",bL1:"L",bL2:"L",base:"L",front:"H",back:"H",left:"W",right:"W"}[sel];
+  const shownBBox=useMemo(()=>applyUnit(productBBox,productUnit),[productBBox,productUnit]);
+  const orientedBBox=useMemo(()=>{
+    if(!shownBBox)return null;
+    const {L:PL,W:PW,H:PH}=shownBBox;
+    switch(productOrientation){
+      case "side": return {L:PL,W:PH,H:PW};
+      case "rotated": return {L:PW,W:PL,H:PH};
+      default: return {L:PL,W:PW,H:PH};
+    }
+  },[shownBBox,productOrientation]);
+  const productInnerDims=useMemo(()=>{
+    if(!orientedBBox)return null;
+    return{
+      L:Math.round((orientedBBox.L+productClearance.left+productClearance.right)*10)/10,
+      W:Math.round((orientedBBox.W+productClearance.front+productClearance.back)*10)/10,
+      H:Math.round((orientedBBox.H+productClearance.top+productClearance.bottom)*10)/10,
+    };
+  },[orientedBBox,productClearance]);
+
+  const handleProductFile=async(file)=>{
+    if(!file)return;
+    setProductLoading(true);setProductError("");setProductSuggestion(null);
+    try{
+      const parsed=await parseProductFile(file);
+      setProductGeometry(parsed.geometry);
+      setProductBBox(parsed.bbox);
+      setProductFile({name:file.name,format:(file.name.split(".").pop()||"").toUpperCase(),sizeKB:Math.round(file.size/1024)});
+      setProductUnit(parsed.detectedUnit||"mm");
+      setProductOrientation("upright");
+      setCollisionCount(-1);
+      setSuggestLoading(true);
+      const bboxMm=applyUnit(parsed.bbox,parsed.detectedUnit||"mm");
+      try{
+        const sug=await inferPackagingFromProduct(bboxMm,file.name,productClearance);
+        setProductSuggestion(sug);
+        if(sug?.innerL&&sug?.innerW&&sug?.innerH){
+          const ai={
+            left:Math.max(0,round1((sug.innerL-bboxMm.L)/2)),right:Math.max(0,round1((sug.innerL-bboxMm.L)/2)),
+            front:Math.max(0,round1((sug.innerW-bboxMm.W)/2)),back:Math.max(0,round1((sug.innerW-bboxMm.W)/2)),
+            top:Math.max(0,round1((sug.innerH-bboxMm.H)/2)),bottom:Math.max(0,round1((sug.innerH-bboxMm.H)/2)),
+          };
+          setAiClearances(ai);
+          setProductClearance(ai);
+        }
+      }catch{
+        setProductSuggestion(null);
+        setAppToast("AI suggestion unavailable (network). Product import still loaded.");
+      }
+    }catch(e){
+      setProductError(e?.message||"Parse failed");
+    }finally{
+      setSuggestLoading(false);
+      setProductLoading(false);
+    }
+  };
+  const applyProductInnerToCarton=()=>{
+    if(!productInnerDims)return;
+    setL(Math.round(productInnerDims.L/5)*5);
+    setW(Math.round(productInnerDims.W/5)*5);
+    setH(Math.round(productInnerDims.H/5)*5);
+  };
+  const clearProduct=()=>{
+    setProductGeometry(null);setProductBBox(null);setProductFile(null);setProductOrientation("upright");
+    setCollisionCount(-1);setProductSuggestion(null);setProductError("");setProductLoading(false);
+    setProductClearance({top:10,bottom:10,left:8,right:8,front:8,back:8});setAiClearances(null);
+  };
+  const truncateName=n=>n?.length>20?`${n.slice(0,17)}...`:n;
+
+  useEffect(()=>{
+    if(productFile&&autoApplyOrientation)applyProductInnerToCarton();
+  },[productOrientation,autoApplyOrientation,productFile,productInnerDims]);
+
+  useEffect(()=>{
+    if(!appToast)return;
+    const t=setTimeout(()=>setAppToast(""),3000);
+    return()=>clearTimeout(t);
+  },[appToast]);
+
+  const handleExport=async(data)=>{
+    const txt=JSON.stringify(data,null,2);
+    try{await navigator.clipboard.writeText(txt);}catch(e){console.log(txt);}
+  };
+
+  return(
+    <div style={{background:T.bg,minHeight:"100vh",color:T.text,fontFamily:"system-ui,-apple-system,sans-serif",display:"flex",flexDirection:"column"}}>
+      {/* Header */}
+      <div style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"10px 14px",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <div style={{width:32,height:32,background:T.purpleLight,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <svg width={16} height={16} viewBox="0 0 36 36">
+            <rect x={2} y={10} width={32} height={18} fill="none" stroke={T.purple} strokeWidth={2.2}/>
+            <rect x={6} y={2} width={10} height={9} fill="none" stroke={T.purple} strokeWidth={1.5} strokeDasharray="3 2"/>
+            <rect x={20} y={2} width={10} height={9} fill="none" stroke={T.purple} strokeWidth={1.5} strokeDasharray="3 2"/>
+          </svg>
+        </div>
+        <div>
+          <div style={{fontSize:14,fontWeight:"700",color:T.text,letterSpacing:"-.3px"}}>HookePak</div>
+          <div style={{fontSize:9,color:T.textLight}}>FEFCO | Pack | Pallet | ROI</div>
+        </div>
+        <span style={{marginLeft:"auto",background:T.purpleLight,color:T.purple,padding:"3px 10px",borderRadius:20,fontSize:10,fontWeight:"600"}}>Live</span>
+      </div>
+
+      {/* Main tabs */}
+      <div style={{display:"flex",background:T.surface,borderBottom:`1px solid ${T.border}`,overflowX:"auto",flexShrink:0}}>
+        {MAIN_TABS.map(([id,lbl])=>(<button key={id} onClick={()=>setTab(id)} style={{flex:"0 0 auto",padding:"9px 14px",background:"none",border:"none",borderBottom:`2px solid ${tab===id?T.purple:"transparent"}`,color:tab===id?T.purple:T.textMid,fontSize:11,fontWeight:tab===id?"700":"400",cursor:"pointer",whiteSpace:"nowrap"}}>{lbl}</button>))}
+      </div>
+      {productFile&&(
+        <div style={{height:32,background:T.purpleLight,borderBottom:`1px solid ${T.purpleMid}`,padding:"0 14px",display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:10,color:T.purple,gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+            <span>📦</span><span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{productFile.name}</span>
+            <span style={{padding:"2px 6px",border:`1px solid ${T.purpleMid}`,borderRadius:10}}>[{productFile.format}]</span>
+          </div>
+          <div style={{display:"flex",gap:4}}>
+            {[["upright","Upright"],["side","On side"],["rotated","Rotated"]].map(([id,lbl])=>(
+              <button key={id} onClick={()=>setProductOrientation(id)} style={{border:`1px solid ${productOrientation===id?T.purple:T.purpleMid}`,background:productOrientation===id?T.purple:"transparent",color:productOrientation===id?"white":T.purple,padding:"2px 6px",borderRadius:12,fontSize:9,cursor:"pointer"}}>{lbl}</button>
+            ))}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{display:"flex",alignItems:"center",gap:5,color:collisionCount<0?T.textMid:(collisionCount>0?"#DC2626":"#16A34A")}}>
+              <span style={{width:7,height:7,borderRadius:999,background:collisionCount<0?"#9CA3AF":(collisionCount>0?"#DC2626":"#16A34A"),display:"inline-block"}}/>
+              {collisionCount<0?"Check fit (open box)":collisionCount>0?"Collision detected":"Fits cleanly"}
+            </span>
+            <button onClick={clearProduct} style={{border:`1px solid ${T.purple}`,background:"white",color:T.purple,padding:"3px 8px",borderRadius:7,fontSize:9,cursor:"pointer"}}>Clear product</button>
+          </div>
+        </div>
+      )}
+
+      {/* Body: left sidebar + main content */}
+      <div style={{display:"flex",flex:1,overflow:"hidden"}}>
+
+        {/* ── LEFT SIDEBAR: Carton controls ───────────────────────────────── */}
+        <div style={{width:200,flexShrink:0,borderRight:`1px solid ${T.border}`,background:T.surface,overflowY:"auto",padding:"12px 10px",display:"grid",gap:10,alignContent:"start"}}>
+          <div style={{fontSize:8,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>Product</div>
+          {!productFile&&!productLoading&&(
+            <div
+              onClick={()=>productInputRef.current?.click()}
+              onDragOver={e=>{e.preventDefault();}}
+              onDrop={e=>{e.preventDefault();const f=e.dataTransfer?.files?.[0];if(f)handleProductFile(f);}}
+              style={{border:`1px dashed ${T.border}`,background:T.bg,borderRadius:10,padding:14,textAlign:"center",cursor:"pointer"}}
+            >
+              <svg width={26} height={26} viewBox="0 0 26 26" style={{display:"block",margin:"0 auto 6px"}}>
+                <rect x={4} y={4} width={18} height={18} rx={3} fill="none" stroke={T.textMid} strokeWidth={1.5}/>
+                <path d="M13 18 V8 M9.5 11.5 L13 8 L16.5 11.5" fill="none" stroke={T.purple} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <div style={{fontSize:10,color:T.textMid}}>Import Product CAD</div>
+              <div style={{fontSize:8,color:T.textLight,marginTop:3}}>OBJ | STL | GLB</div>
+            </div>
+          )}
+          {productLoading&&(
+            <div style={{border:`1px dashed ${T.border}`,background:T.bg,borderRadius:10,padding:14,textAlign:"center"}}>
+              <div className="hp-spin" style={{width:18,height:18,border:"2px solid #ddd",borderTop:`2px solid ${T.purple}`,borderRadius:"50%",margin:"0 auto 6px"}}/>
+              <div style={{fontSize:10,color:T.textMid}}>Parsing file...</div>
+            </div>
+          )}
+          {productError&&(
+            <div style={{border:`1px solid #FCA5A5`,background:"#FEF2F2",borderRadius:10,padding:10}}>
+              <div style={{fontSize:10,color:"#B91C1C"}}>{productError}</div>
+              <button onClick={()=>productInputRef.current?.click()} style={{marginTop:6,border:"1px solid #EF4444",background:"white",color:"#B91C1C",fontSize:9,padding:"4px 8px",borderRadius:6,cursor:"pointer"}}>Try again</button>
+            </div>
+          )}
+          {productFile&&shownBBox&&(
+            <>
+              <div style={{border:`1px solid ${T.border}`,background:T.bg,borderRadius:10,padding:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{fontSize:10,fontWeight:700,color:T.text}}>{truncateName(productFile.name)}</div>
+                  <button onClick={clearProduct} style={{border:"none",background:"transparent",fontSize:14,cursor:"pointer",color:T.textLight,lineHeight:1}}>X</button>
+                </div>
+                <div style={{marginTop:4,fontSize:8,color:T.purple,display:"inline-block",padding:"2px 6px",borderRadius:10,background:T.purpleLight,border:`1px solid ${T.purpleMid}`}}>{productFile.format}</div>
+                <div style={{marginTop:6,fontSize:9,fontFamily:"monospace",color:T.text}}>L={shownBBox.L} W={shownBBox.W} H={shownBBox.H} {productUnit}</div>
+              </div>
+              <div style={{display:"flex",gap:4}}>
+                {["mm","cm","inches","m"].map(u=><button key={u} onClick={()=>setProductUnit(u)} style={{flex:1,border:`1px solid ${productUnit===u?T.purple:T.border}`,background:productUnit===u?T.purpleLight:"white",color:productUnit===u?T.purple:T.textMid,fontSize:8,padding:"4px 2px",borderRadius:6,cursor:"pointer"}}>{u}</button>)}
+              </div>
+              <div style={{border:`1px solid ${T.border}`,background:T.bg,borderRadius:8,padding:8}}>
+                <div style={{fontSize:9,color:T.textMid,fontWeight:700,marginBottom:6}}>CLEARANCES (mm)</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                  {["top","bottom","left","right","front","back"].map(k=>(
+                    <label key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:8,color:T.textLight,textTransform:"capitalize"}}>
+                      {k}
+                      <input type="number" value={productClearance[k]} onChange={e=>setProductClearance(v=>({...v,[k]:Math.max(0,Number(e.target.value)||0)}))} style={{width:44,padding:"2px 4px",fontSize:10,border:`1px solid ${T.border}`,borderRadius:5}}/>
+                    </label>
+                  ))}
+                </div>
+                <div style={{fontSize:10,color:T.textMid,marginTop:6,fontFamily:"monospace"}}>L={productInnerDims?.L??"-"}  W={productInnerDims?.W??"-"}  H={productInnerDims?.H??"-"} mm</div>
+                <div style={{display:"flex",gap:5,marginTop:6}}>
+                  <button onClick={applyProductInnerToCarton} style={{flex:1,border:"none",background:T.purple,color:"white",fontSize:8,padding:"5px 6px",borderRadius:6,cursor:"pointer"}}>Apply to carton</button>
+                  <button onClick={()=>setProductClearance(aiClearances||{top:10,bottom:10,left:8,right:8,front:8,back:8})} style={{flex:1,border:`1px solid ${T.purple}`,background:"white",color:T.purple,fontSize:8,padding:"5px 6px",borderRadius:6,cursor:"pointer"}}>Reset to AI</button>
+                </div>
+              </div>
+              <div style={{border:`1px solid ${T.border}`,background:T.bg,borderRadius:8,padding:8}}>
+                <div style={{fontSize:9,color:T.textMid,fontWeight:700,marginBottom:6}}>ORIENTATION</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}>
+                  {[["upright","Upright"],["side","On side"],["rotated","Rotated 90"]].map(([id,lbl])=>(
+                    <button key={id} onClick={()=>setProductOrientation(id)} style={{gridColumn:id==="rotated"?"1 / span 2":"auto",border:`1px solid ${productOrientation===id?T.purple:T.border}`,background:productOrientation===id?T.purpleLight:"white",color:productOrientation===id?T.purple:T.textMid,fontSize:8,padding:"5px 4px",borderRadius:6,cursor:"pointer"}}>{lbl}</button>
+                  ))}
+                </div>
+                <div style={{marginTop:6,fontSize:9,fontFamily:"monospace",color:T.text}}>Detected: L={round1(shownBBox.L)} W={round1(shownBBox.W)} H={round1(shownBBox.H)}</div>
+                <div style={{fontSize:9,fontFamily:"monospace",color:T.textMid}}>As packed: L={round1(orientedBBox?.L||0)} W={round1(orientedBBox?.W||0)} H={round1(orientedBBox?.H||0)}</div>
+                <label style={{display:"flex",alignItems:"center",gap:6,marginTop:6,fontSize:8,color:T.textMid}}>
+                  <input type="checkbox" checked={autoApplyOrientation} onChange={e=>setAutoApplyOrientation(e.target.checked)}/>
+                  Auto-apply dims when orientation changes
+                </label>
+                {!autoApplyOrientation&&<button onClick={applyProductInnerToCarton} style={{marginTop:6,border:`1px solid ${T.purple}`,background:"white",color:T.purple,fontSize:8,padding:"5px 8px",borderRadius:6,cursor:"pointer"}}>Apply</button>}
+              </div>
+              {suggestLoading&&<div style={{fontSize:9,color:T.textMid,padding:"6px 2px"}}>Generating AI suggestion...</div>}
+              {productSuggestion&&(
+                <div style={{background:T.purpleLight,border:`1px solid ${T.purpleMid}`,borderRadius:10,padding:10}}>
+                  <div style={{fontSize:9,color:T.purple,fontWeight:700}}>AI Suggestion</div>
+                  <div style={{fontSize:9,color:T.text,marginTop:4}}>Detected: {productSuggestion.productGuess} <span style={{fontSize:8,color:T.textLight}}>({productSuggestion.confidence})</span></div>
+                  <div style={{fontSize:9,color:T.textMid,marginTop:3}}>FEFCO {productSuggestion.fefcoStyle} - {productSuggestion.fefcoStyleName}</div>
+                  <div style={{fontSize:9,color:T.textMid}}>L={productSuggestion.innerL} W={productSuggestion.innerW} H={productSuggestion.innerH}mm</div>
+                  <div style={{fontSize:9,color:T.textMid}}>{productSuggestion.boardRecommendation}</div>
+                  <div style={{fontSize:8,color:T.textLight,marginTop:4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{productSuggestion.reasoning}</div>
+                  <div style={{display:"flex",gap:5,marginTop:8}}>
+                    <button onClick={()=>{
+                      setL(productSuggestion.innerL);setW(productSuggestion.innerW);setH(productSuggestion.innerH);setStyle(productSuggestion.fefcoStyle);setBoard(mapBoardName(productSuggestion.boardRecommendation));
+                      setAppToast(`Applied: ${productSuggestion.productGuess} -> FEFCO ${productSuggestion.fefcoStyle}, ${productSuggestion.innerL}x${productSuggestion.innerW}x${productSuggestion.innerH}mm`);
+                    }} style={{flex:1,border:"none",background:T.purple,color:"white",fontSize:8,padding:"5px 6px",borderRadius:6,cursor:"pointer"}}>Apply dims + style</button>
+                    <button onClick={()=>{setL(productSuggestion.innerL);setW(productSuggestion.innerW);setH(productSuggestion.innerH);setAppToast("Prefilled dimensions for manual review");}} style={{flex:1,border:`1px solid ${T.purple}`,background:"white",color:T.purple,fontSize:8,padding:"5px 6px",borderRadius:6,cursor:"pointer"}}>Edit first</button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          <input ref={productInputRef} type="file" accept=".obj,.stl,.glb,.gltf" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)handleProductFile(f);e.target.value="";}}/>
+
+          <div style={{height:1,background:T.border,margin:"4px 0"}}/>
+          <div style={{fontSize:8,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>Carton Dimensions</div>
+          <Slider label="L  Length" value={L} min={80} max={800} color={T.purple} onChange={v=>{setL(v);setSel(null);}} glow={selCtrl==="L"}/>
+          <Slider label="W  Width"  value={W} min={50} max={600} color={T.green}  onChange={v=>{setW(Math.min(v,L));setSel(null);}} glow={selCtrl==="W"}/>
+          <Slider label="H  Height" value={H} min={30} max={600} color={T.blue}   onChange={v=>{setH(v);setSel(null);}} glow={selCtrl==="H"}/>
+
+          <div style={{height:1,background:T.border,margin:"4px 0"}}/>
+          <div style={{fontSize:8,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>Board Type</div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {BOARDS.map(b=>(<button key={b} onClick={()=>setBoard(b)} style={{textAlign:"left",background:board===b?T.purpleLight:"none",border:`1px solid ${board===b?T.purple:T.border}`,color:board===b?T.purple:T.textMid,padding:"5px 8px",fontSize:10,borderRadius:7,cursor:"pointer",fontWeight:board===b?"600":"400"}}>{b}</button>))}
+          </div>
+
+          <div style={{height:1,background:T.border,margin:"4px 0"}}/>
+          <div style={{fontSize:8,color:T.textLight,textTransform:"uppercase",letterSpacing:1}}>Dimensions</div>
+          <div style={{background:T.bg,borderRadius:8,padding:"8px 10px",fontFamily:"monospace",fontSize:10,color:T.text,border:`1px solid ${T.border}`}}>
+            <div><span style={{color:T.purple}}>L</span> {L} mm</div>
+            <div><span style={{color:T.green}}>W</span> {W} mm</div>
+            <div><span style={{color:T.blue}}>H</span> {H} mm</div>
+            <div style={{marginTop:4,color:T.textMid,fontSize:9}}>Vol: {round1(L*W*H/1e6)} L</div>
+          </div>
+        </div>
+
+        {/* ── MAIN CONTENT ─────────────────────────────────────────────────── */}
+        <div style={{flex:1,overflowY:"auto"}}>
+          {tab==="design"&&<DesignTab L={L} W={W} H={H} lidH={lidH} style={style} setStyle={setStyle} board={board} sel={sel} setSel={setSel} setBoard={setBoard} setLidH={setLidH} setL={setL} setW={setW} setH={setH} prompt={prompt} setPrompt={setPrompt} loading={loading} setLoading={setLoading} boardThicknessMm={boardThicknessMm} productGeometry={productGeometry} productBBox={orientedBBox} productClearance={productClearance} productOrientation={productOrientation} collisionCount={collisionCount} onCollisionUpdate={setCollisionCount}/>}
+          {tab==="pack"&&<PackTab box={box} fillPatterns={[]} bestFill={null}/>}
+          {tab==="pallet"&&<PalletTab box={box} style={style} board={board}/>}
+          {tab==="roi"&&<ROITab L={L} W={W} H={H} style={style} board={board} saved={saved} setSaved={setSaved} onExport={handleExport}/>}
+          {tab==="scenarios"&&<ScenariosTab saved={saved} setSaved={setSaved} onExport={handleExport}/>}
+        </div>
+      </div>
+
+      <style>{`
+        input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;background:${T.purple};cursor:pointer;border:2px solid white;box-shadow:0 1px 4px rgba(124,58,237,.3);}
+        input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:${T.purple};cursor:pointer;border:2px solid white;}
+        .hp-spin{animation:hp-spin 1s linear infinite}
+        @keyframes hp-spin{to{transform:rotate(360deg)}}
+        *{box-sizing:border-box}
+      `}</style>
+      {appToast&&<div style={{position:"fixed",right:14,bottom:14,background:T.purple,color:"white",padding:"9px 12px",borderRadius:8,fontSize:10,zIndex:9999}}>{appToast}</div>}
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root')); root.render(<HookePakApp />);</script></body></html>
