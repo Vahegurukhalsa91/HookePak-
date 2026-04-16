@@ -6,6 +6,10 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev:web": "vite",
+    "dev:api": "cd backend && py -3 -m uvicorn main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:stack": "concurrently \"npm run dev:api\" \"vite\"",
+    "dev:full": "concurrently \"npm run dev:api\" \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "dist": "vite build && electron-builder",
     "preview": "vite preview"

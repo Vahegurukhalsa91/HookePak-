@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildInsertInScene, buildPaperboardInScene, buildPackTransitPreview, isPaperboardStyle } from "../CartonBuilder";
+import { setViewerCommandHandler } from "./viewerBridge.js";
 
 const SC = 0.005;
 
@@ -25,6 +26,9 @@ export class SceneManager {
     this.directionalLight = null;
     this._raf = 0;
     this.controls = null;
+    /** @type {string} */
+    this.activeStageId = "primary";
+    this._onViewerCommand = (cmd) => this.handleViewerCommand(cmd);
   }
 
   init(mount) {
@@ -75,10 +79,21 @@ export class SceneManager {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 0.25;
-    this.controls.maxDistance = 14;
+    this.controls.minDistance = 0.18;
+    this.controls.maxDistance = 22;
+    this.controls.enablePan = true;
+    this.controls.zoomSpeed = 1.15;
+    this.controls.rotateSpeed = 0.85;
+    this.controls.panSpeed = 0.75;
+    this.controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN,
+    };
     this.controls.target.set(0, 0, 0);
     this.controls.update();
+
+    setViewerCommandHandler(this._onViewerCommand);
 
     const onResize = () => {
       if (!this.mount) return;
@@ -98,12 +113,71 @@ export class SceneManager {
     tick();
   }
 
+  handleViewerCommand(cmd) {
+    if (!cmd || !this.camera || !this.controls) return;
+    const { type } = cmd;
+    if (type === "resetCamera") {
+      this.setActiveStage(this.activeStageId);
+      return;
+    }
+    if (type === "framePackaging") {
+      this.framePackaging();
+      return;
+    }
+    if (type === "zoomIn") {
+      this.dollyTowardTarget(0.82);
+      return;
+    }
+    if (type === "zoomOut") {
+      this.dollyTowardTarget(1.22);
+      return;
+    }
+  }
+
+  dollyTowardTarget(factor) {
+    const target = this.controls.target;
+    const pos = this.camera.position;
+    const dir = pos.clone().sub(target);
+    const len = dir.length();
+    if (len < 1e-6) return;
+    dir.multiplyScalar(factor);
+    const nextLen = Math.max(this.controls.minDistance * 1.02, Math.min(this.controls.maxDistance * 0.98, dir.length()));
+    dir.normalize().multiplyScalar(nextLen);
+    pos.copy(target.clone().add(dir));
+    this.controls.update();
+  }
+
+  framePackaging() {
+    if (!this.packagingGroup || !this.camera || !this.controls) return;
+    const box = new THREE.Box3().setFromObject(this.packagingGroup);
+    if (!box.isEmpty()) {
+      const sphere = box.getBoundingSphere(new THREE.Sphere());
+      const center = sphere.center.clone();
+      const radius = Math.max(sphere.radius, 0.04);
+      this.controls.target.copy(center);
+      const offset = new THREE.Vector3(0.62, 0.48, 1.05).normalize().multiplyScalar(radius * 3.1);
+      this.camera.position.copy(center.clone().add(offset));
+      const span = Math.max(radius * 2.2, 0.25);
+      this.controls.minDistance = Math.max(0.12, span * 0.12);
+      this.controls.maxDistance = Math.max(6, span * 14);
+      this.camera.near = Math.max(0.02, span / 2000);
+      this.camera.far = Math.max(500, span * 80);
+      this.camera.updateProjectionMatrix();
+      this.controls.update();
+      return;
+    }
+    this.setActiveStage(this.activeStageId);
+  }
+
   setActiveStage(stageId) {
     if (!this.camera) return;
-    const pose = CAMERA_POSES[stageId] || CAMERA_POSES.primary;
+    this.activeStageId = stageId || "primary";
+    const pose = CAMERA_POSES[this.activeStageId] || CAMERA_POSES.primary;
     this.camera.position.copy(pose.position);
     if (this.controls) {
       this.controls.target.copy(pose.target);
+      this.controls.minDistance = 0.18;
+      this.controls.maxDistance = 22;
       this.controls.update();
     } else {
       this.camera.lookAt(pose.target);
@@ -122,6 +196,10 @@ export class SceneManager {
 
     const primary = designState?.primary;
     const transit = designState?.transitCarton;
+
+    if (typeof activeStage === "string") {
+      this.activeStageId = activeStage;
+    }
 
     if (activeStage === "pack") {
       if (primary && transit) {
@@ -158,6 +236,7 @@ export class SceneManager {
   }
 
   dispose() {
+    setViewerCommandHandler(null);
     cancelAnimationFrame(this._raf);
     this._raf = 0;
     if (this._onResize) window.removeEventListener("resize", this._onResize);

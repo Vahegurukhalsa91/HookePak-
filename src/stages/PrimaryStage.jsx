@@ -3,6 +3,7 @@ import { THEME } from "../theme";
 import { Dieline2D } from "../components/Dieline2D";
 import { genDXFPaperboard } from "../packform/paperboardDXF";
 import { getPaperboardGeometry, gsmFromBoardGrade } from "../packform/paperboard";
+import { sendViewerCommand } from "../scene/viewerBridge";
 
 export function PrimaryStage({ status = "pending", designState, updateDesign, setToast }) {
   const primary = designState?.primary;
@@ -416,7 +417,7 @@ export function PrimaryStage({ status = "pending", designState, updateDesign, se
         <div
           style={{
             position: "absolute",
-            bottom: 64,
+            bottom: subTab === "3D" && !showFullDieline ? 88 : 16,
             left: 12,
             display: "flex",
             gap: 8,
@@ -451,7 +452,7 @@ export function PrimaryStage({ status = "pending", designState, updateDesign, se
           <div
             style={{
               position: "absolute",
-              bottom: 120,
+              bottom: 148,
               left: 12,
               right: 12,
               maxWidth: 360,
@@ -470,26 +471,36 @@ export function PrimaryStage({ status = "pending", designState, updateDesign, se
         )}
       </div>
 
-      {subTab === "3D" && (
+      {subTab === "3D" && !showFullDieline && (
         <div
           style={{
             pointerEvents: "auto",
-            padding: "10px 16px",
-            background: "rgba(13,12,11,0.82)",
-            backdropFilter: "blur(12px)",
-            borderTop: `1px solid ${THEME.surface4}`,
+            position: "absolute",
+            left: "50%",
+            bottom: 14,
+            transform: "translateX(-50%)",
+            zIndex: 6,
             display: "flex",
+            flexWrap: "wrap",
             alignItems: "center",
-            gap: 10,
-            flexShrink: 0,
+            justifyContent: "center",
+            gap: 8,
+            maxWidth: "min(720px, calc(100vw - 48px))",
+            padding: "8px 12px",
+            borderRadius: THEME.radius.lg,
+            background: "rgba(13,12,11,0.88)",
+            backdropFilter: "blur(14px)",
+            border: `1px solid ${THEME.surface4}`,
+            boxShadow: "0 8px 28px rgba(0,0,0,0.35)",
           }}
         >
           <button
             type="button"
+            title="Play / pause fold animation"
             onClick={handlePlayPause}
             style={{
-              width: 32,
-              height: 32,
+              width: 30,
+              height: 30,
               borderRadius: THEME.radius.md,
               background: THEME.accent,
               border: "none",
@@ -498,18 +509,19 @@ export function PrimaryStage({ status = "pending", designState, updateDesign, se
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 12,
+              fontSize: 11,
               flexShrink: 0,
             }}
           >
             {playing ? "⏸" : "▶"}
           </button>
 
-          <div style={{ flex: 1, position: "relative", height: 20, display: "flex", alignItems: "center" }}>
+          <div style={{ width: 140, position: "relative", height: 18, display: "flex", alignItems: "center", flexShrink: 0 }}>
             <div style={{ position: "absolute", left: 0, right: 0, height: 3, background: THEME.surface4, borderRadius: 2 }} />
             <div style={{ position: "absolute", left: 0, width: `${foldT * 100}%`, height: 3, background: THEME.accent, borderRadius: 2 }} />
             <input
               type="range"
+              title="Fold progress"
               min={0}
               max={100}
               value={Math.round(foldT * 100)}
@@ -527,13 +539,13 @@ export function PrimaryStage({ status = "pending", designState, updateDesign, se
                 appearance: "none",
                 background: "transparent",
                 cursor: "pointer",
-                height: 20,
+                height: 18,
                 margin: 0,
               }}
             />
           </div>
 
-          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
             {[
               ["Flat", 0],
               ["½", 0.5],
@@ -544,7 +556,7 @@ export function PrimaryStage({ status = "pending", designState, updateDesign, se
                 type="button"
                 onClick={() => jumpFold(val)}
                 style={{
-                  padding: "4px 9px",
+                  padding: "3px 7px",
                   borderRadius: THEME.radius.sm,
                   border: `1px solid ${Math.abs(foldT - val) < 0.04 ? THEME.accentBorder : THEME.surface4}`,
                   background: Math.abs(foldT - val) < 0.04 ? THEME.accentMuted : "transparent",
@@ -559,8 +571,54 @@ export function PrimaryStage({ status = "pending", designState, updateDesign, se
             ))}
           </div>
 
-          <div style={{ fontSize: 9, color: THEME.textTertiary, fontFamily: THEME.fontMono, flexShrink: 0, marginLeft: 8 }}>
-            {L}×{W}×{H}mm
+          <div
+            style={{
+              width: 1,
+              height: 22,
+              background: THEME.surface4,
+              flexShrink: 0,
+              margin: "0 2px",
+            }}
+          />
+
+          <div style={{ display: "flex", gap: 4, flexShrink: 0, alignItems: "center" }}>
+            {[
+              ["Fit", "framePackaging"],
+              ["+", "zoomIn"],
+              ["−", "zoomOut"],
+              ["Reset", "resetCamera"],
+            ].map(([label, cmd]) => (
+              <button
+                key={cmd}
+                type="button"
+                title={
+                  cmd === "framePackaging"
+                    ? "Frame carton (wheel = zoom, drag = orbit, right-drag = pan)"
+                    : cmd === "zoomIn"
+                      ? "Zoom in"
+                      : cmd === "zoomOut"
+                        ? "Zoom out"
+                        : "Reset camera to stage default"
+                }
+                onClick={() => sendViewerCommand({ type: cmd })}
+                style={{
+                  padding: label === "Fit" || label === "Reset" ? "4px 8px" : "4px 10px",
+                  borderRadius: THEME.radius.sm,
+                  border: `1px solid ${THEME.surface4}`,
+                  background: THEME.surface3,
+                  color: THEME.textSecondary,
+                  fontSize: 10,
+                  fontFamily: THEME.fontMono,
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 9, color: THEME.textTertiary, fontFamily: THEME.fontMono, flexShrink: 0, paddingLeft: 4 }}>
+            {L}×{W}×{H} mm
           </div>
         </div>
       )}
